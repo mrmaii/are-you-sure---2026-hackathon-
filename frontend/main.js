@@ -7,7 +7,7 @@ const state = {
   title: "New Project",
   nodes: [],
   activeId: null,
-  canvas: { x: 0, y: 0 },
+  canvas: { x: 0, y: 0, scale: 1 },
   isDragging: false,
   mouse: { x: 0, y: 0 },
   dialog: [],
@@ -101,6 +101,26 @@ function openNodeContextMenu(x, y, nodeId) {
   contextMenu.style.left = `${left}px`;
   contextMenu.style.top = `${top}px`;
   contextMenu.classList.remove("hidden");
+
+  const node = state.nodes.find((n) => n.id === nodeId);
+  const btnAnswer = contextMenu.querySelector('[data-action="answer"]');
+  const btnSpawn = contextMenu.querySelector('[data-action="spawn"]');
+  const btnTips = contextMenu.querySelector('[data-action="tips"]');
+  if (node && node.node_type === "section") {
+    if (btnAnswer) btnAnswer.style.display = "none";
+    if (btnTips) btnTips.style.display = "none";
+    if (btnSpawn) {
+      btnSpawn.style.display = "";
+      btnSpawn.textContent = "在本板块下生成新问题";
+    }
+  } else {
+    if (btnAnswer) btnAnswer.style.display = "";
+    if (btnTips) btnTips.style.display = "";
+    if (btnSpawn) {
+      btnSpawn.style.display = "";
+      btnSpawn.textContent = "追问";
+    }
+  }
 }
 
 function closeNodeContextMenu() {
@@ -111,6 +131,7 @@ function closeNodeContextMenu() {
 }
 
 function showToast(text, type) {
+  if (!toastEl || !toastText || !toastIcon) return;
   toastText.innerText = text;
   toastIcon.className = `w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg ${
     type === "green" ? "bg-[#34A853]" : type === "red" ? "bg-[#EA4335]" : "bg-[#4285F4]"
@@ -118,9 +139,22 @@ function showToast(text, type) {
   toastIcon.innerHTML = `<i class="fas fa-${
     type === "green" ? "check" : type === "red" ? "exclamation" : "info"
   }"></i>`;
-  toastEl.classList.remove("translate-x-20", "opacity-0");
-  setTimeout(() => toastEl.classList.add("translate-x-20", "opacity-0"), 3000);
+  // 从顶部滑入；收回时用 toast-retracted 完全移出视口，避免残留
+  toastEl.classList.remove("toast-retracted");
+  toastEl.classList.remove("-translate-y-full");
+  toastEl.classList.add("translate-y-0");
+  const t = setTimeout(() => {
+    toastEl.classList.remove("translate-y-0");
+    toastEl.classList.add("-translate-y-full");
+    toastEl.ontransitionend = () => {
+      toastEl.classList.add("toast-retracted");
+      toastEl.ontransitionend = null;
+    };
+  }, 3000);
+  if (toastEl._toastTimer) clearTimeout(toastEl._toastTimer);
+  toastEl._toastTimer = t;
 }
+if (typeof window !== "undefined") window.showToast = showToast;
 
 function addMsg(role, text) {
   const div = document.createElement("div");
@@ -323,7 +357,7 @@ async function switchView() {
   return new Promise((resolve) => {
     setTimeout(() => {
       chatView.classList.add("hidden");
-      mindmapView.classList.remove("pointer-events-none", "scale-95");
+      mindmapView.classList.remove("opacity-0", "pointer-events-none", "scale-95");
       mindmapView.classList.add("opacity-100");
       topBar.classList.remove("opacity-0", "pointer-events-none", "-translate-y-8");
       projectTitleDisplay.innerText = state.title;
@@ -338,13 +372,66 @@ const LAYOUT = {
   centerY: 2000,
   radiusLevel1: 380,
   radiusStep: 320,
-  // 四个方向的角度（度）：上、左、右、下（y 轴向下，270° = 上）
-  directions: [270, 180, 0, 90],
+  // 6 个方向：上、右上、右下、下、左下、左上（度）
+  directions: [270, 330, 30, 90, 150, 210],
   nodeWidthRoot: 260,
   nodeWidth: 200,
+  nodeWidthSection: 220,
   nodeHeight: 80,
-  perpGap: 100, // 同一方向多个子节点时的垂直间距
+  perpGap: 100,
 };
+
+// ————— 连线形态系统（独立于节点临时推断） —————
+// 四种形态：粗直线、细直线、弯曲细线、弯曲粗线；可选虚线（Tips 附属）
+const CONNECTOR_MORPHOLOGY = {
+  THICK_STRAIGHT: "thick_straight",   // 粗的直线：主脉
+  THIN_STRAIGHT: "thin_straight",     // 细的直线
+  THIN_CURVED: "thin_curved",         // 弯曲的细线
+  THICK_CURVED: "thick_curved",       // 弯曲的粗线
+};
+
+/**
+ * 根据父子节点与整树结构，唯一确定一条连线的状态（形态 + 是否虚线）。
+ * 规则：
+ * - 根 → 板块：粗直线（主脉）
+ * - 板块 → 问题：弯曲粗线
+ * - 问题 → 追问 / 问题：弯曲细线
+ * - 任意 → Tips 附属：弯曲细线 + 虚线
+ */
+function getConnectorState(parent, child, root, nodes) {
+  if (!parent || !child || !root) {
+    return { morphology: CONNECTOR_MORPHOLOGY.THIN_CURVED, dashed: false };
+  }
+  const isRoot = (n) => n && n.level === 0;
+  const isSection = (n) =>
+    n && (n.node_type === "section" || (root && n.parent_id === root.id && n.level === 1));
+  const isTip = (n) => n && (n.node_type === "tip" || n.status === "ai");
+  const isQuestion = (n) => n && n.node_type !== "tip" && !isSection(n);
+
+  const fromRoot = isRoot(parent);
+  const toSection = isSection(child);
+  const toTip = isTip(child);
+  const fromSection = isSection(parent);
+  const toQuestion = isQuestion(child);
+
+  if (fromRoot && toSection) {
+    return { morphology: CONNECTOR_MORPHOLOGY.THICK_STRAIGHT, dashed: false };
+  }
+  if (fromSection && toQuestion) {
+    return { morphology: CONNECTOR_MORPHOLOGY.THICK_CURVED, dashed: false };
+  }
+  if (toTip) {
+    return { morphology: CONNECTOR_MORPHOLOGY.THIN_CURVED, dashed: true };
+  }
+  // 追问：问题 → 问题
+  return { morphology: CONNECTOR_MORPHOLOGY.THIN_CURVED, dashed: false };
+}
+
+/** 根据形态返回描边宽度（主题在渲染时再乘系数即可） */
+function getConnectorStrokeWidth(morphology, isHackathon) {
+  const thick = morphology === CONNECTOR_MORPHOLOGY.THICK_STRAIGHT || morphology === CONNECTOR_MORPHOLOGY.THICK_CURVED;
+  return thick ? (isHackathon ? 3.5 : 3) : (isHackathon ? 1.5 : 1.2);
+}
 
 function buildMap() {
   canvasInner.innerHTML = "";
@@ -376,7 +463,6 @@ function buildMap() {
     const myCenterY = myPos.y + LAYOUT.nodeHeight / 2;
 
     if (depth === 0) {
-      // 第一层：向 上、左、右、下 四个方向发散
       const dirs = LAYOUT.directions;
       children.forEach((child, idx) => {
         const angle = dirs[idx % dirs.length];
@@ -384,7 +470,7 @@ function buildMap() {
         const r = LAYOUT.radiusLevel1;
         const childCenterX = cx + r * Math.cos(rad);
         const childCenterY = cy + r * Math.sin(rad);
-        const w = LAYOUT.nodeWidth;
+        const w = (child.node_type === "section") ? (LAYOUT.nodeWidthSection || LAYOUT.nodeWidth) : LAYOUT.nodeWidth;
         pos.set(child.id, {
           x: childCenterX - w / 2,
           y: childCenterY - LAYOUT.nodeHeight / 2,
@@ -442,7 +528,7 @@ function buildMap() {
   canvasInner.appendChild(svg);
   renderConnectors(svg, nodes, pos);
 
-  // 节点层：在连线上方（z-index 1），支持左键选中 + 拖拽移动 + 右键菜单
+  // 节点层：根=芯片+文字，一级板块=文件夹+文字，其余=问题卡片
   nodes.forEach((n) => {
     const p = pos.get(n.id);
     if (!p) return;
@@ -450,7 +536,13 @@ function buildMap() {
     const div = document.createElement("div");
     div.id = `node-${n.id}`;
     const isTip = n.node_type === "tip" || n.status === "ai";
-    div.className = `node absolute p-6 rounded-[28px] font-black text-sm shadow-xl flex items-center justify-center text-center cursor-pointer ${
+    const isRoot = n.level === 0;
+    const root = nodes.find((r) => r.level === 0);
+    const isSection = n.node_type === "section" || (n.level === 1 && root && n.parent_id === root.id);
+    const title = (n.title || "").trim() || getNodeShortTitle(n);
+    div.className = `node absolute rounded-[28px] font-black text-sm shadow-xl flex items-center justify-center cursor-pointer ${
+      isRoot ? "node-root p-5 gap-2 flex-col" : isSection ? "node-section p-4 gap-2 flex-col" : "p-6 text-center"
+    } ${
       isTip ? "node-tip" : (n.status === "red" ? "node-red" : "node-green")
     } ${!isTip && n.status === "red" ? "pulse-node" : ""}`;
     div.style.left = `${p.x}px`;
@@ -458,7 +550,23 @@ function buildMap() {
     div.style.width = `${width}px`;
     div.style.minHeight = `${LAYOUT.nodeHeight}px`;
     div.style.zIndex = "1";
-    div.innerHTML = getNodeShortTitle(n);
+    if (isRoot) {
+      div.innerHTML = `
+        <div class="flex flex-col items-center gap-1.5 text-gray-800">
+          <i class="fas fa-microchip text-2xl text-[#4285F4]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">项目</span>
+          <span class="font-bold text-center leading-tight break-words">${escapeHtml(title)}</span>
+        </div>`;
+    } else if (isSection) {
+      div.innerHTML = `
+        <div class="flex flex-col items-center gap-1.5 text-gray-800">
+          <i class="fas fa-folder text-2xl text-[#34A853]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">板块</span>
+          <span class="font-semibold text-center leading-tight">${escapeHtml(title)}</span>
+        </div>`;
+    } else {
+      div.innerHTML = escapeHtml(getNodeShortTitle(n));
+    }
     div.onmousedown = (e) => {
       e.stopPropagation();
       state.draggingNode = n.id;
@@ -481,7 +589,7 @@ function buildMap() {
     div.oncontextmenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      selectNode(n.id);
+      selectNode(n.id, { panToCenter: false });
       openNodeContextMenu(e.clientX, e.clientY, n.id);
     };
     canvasInner.appendChild(div);
@@ -490,15 +598,18 @@ function buildMap() {
   syncCanvas();
 }
 
-// 根据当前节点位置绘制曲线连线（二次贝塞尔）
+// 根据当前节点位置绘制连线，形态由连线状态系统决定（粗/细 × 直/曲，可选虚线）
 function renderConnectors(svgEl, nodes, posMap) {
   if (!svgEl) svgEl = document.getElementById("connector-svg");
   if (!svgEl) return;
   svgEl.innerHTML = "";
+  const root = nodes.find((r) => r.level === 0);
   const curveOffset = 80; // 曲线弯曲程度
 
   nodes.forEach((n) => {
     if (!n.parent_id) return;
+    const parent = nodes.find((nn) => nn.id === n.parent_id);
+    if (!parent) return;
     const pPos = posMap.get(n.parent_id);
     const cPos = posMap.get(n.id);
     if (!pPos || !cPos) return;
@@ -508,24 +619,38 @@ function renderConnectors(svgEl, nodes, posMap) {
     const sy = pPos.y + LAYOUT.nodeHeight / 2;
     const ex = cPos.x + cW / 2;
     const ey = cPos.y + LAYOUT.nodeHeight / 2;
-    const dx = ex - sx;
-    const dy = ey - sy;
-    const midX = (sx + ex) / 2;
-    const midY = (sy + ey) / 2;
-    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    const perpX = (-dy / len) * curveOffset;
-    const perpY = (dx / len) * curveOffset;
-    const cx = midX + perpX;
-    const cy = midY + perpY;
-    const d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
+
+    const state = getConnectorState(parent, n, root, nodes);
+    const straight =
+      state.morphology === CONNECTOR_MORPHOLOGY.THICK_STRAIGHT ||
+      state.morphology === CONNECTOR_MORPHOLOGY.THIN_STRAIGHT;
+    const d = straight
+      ? `M ${sx} ${sy} L ${ex} ${ey}`
+      : (() => {
+          const dx = ex - sx;
+          const dy = ey - sy;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const perpX = (-dy / len) * curveOffset;
+          const perpY = (dx / len) * curveOffset;
+          const midX = (sx + ex) / 2;
+          const midY = (sy + ey) / 2;
+          return `M ${sx} ${sy} Q ${midX + perpX} ${midY + perpY} ${ex} ${ey}`;
+        })();
+
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("d", d);
     path.setAttribute("fill", "none");
-    const isTip = n.node_type === "tip" || n.status === "ai";
-    const stroke = isTip ? "#1E88E5" : (n.status === "green" ? "#34A853" : "#EA4335");
-    path.setAttribute("stroke", stroke);
-    path.setAttribute("stroke-width", "2");
     path.setAttribute("stroke-linecap", "round");
+
+    const isTipChild = n.node_type === "tip" || n.status === "ai";
+    const isHackathon = document.body.classList.contains("theme-hackathon");
+    const stroke = isHackathon
+      ? (isTipChild ? "#00d4ff" : n.status === "green" ? "#00ff88" : "#00fff9")
+      : (isTipChild ? "#1E88E5" : n.status === "green" ? "#34A853" : "#EA4335");
+    path.setAttribute("stroke", stroke);
+    path.setAttribute("stroke-width", String(getConnectorStrokeWidth(state.morphology, isHackathon)));
+    if (state.dashed) path.setAttribute("stroke-dasharray", "8 5");
+    if (isHackathon) path.classList.add("connector-hackathon");
     svgEl.appendChild(path);
   });
 }
@@ -541,6 +666,32 @@ function updateConnectors() {
     }
   });
   renderConnectors(null, state.nodes, posMap);
+}
+
+// 黑客松：在「文件夹」板块下生成一个由该板块 Skills 指导的新问题（仅追问，无需先作答）
+async function triggerSectionQuestionFromNode(nodeId) {
+  if (!state.projectId) return;
+  const node = state.nodes.find((n) => n.id === nodeId);
+  if (!node || node.node_type !== "section") return;
+  try {
+    const newNode = await apiJson(
+      `/api/projects/${state.projectId}/nodes/${nodeId}/spawn-section-question`,
+      { method: "POST" },
+    );
+    try {
+      const project = await apiJson(`/api/projects/${state.projectId}`);
+      state.nodes = project.nodes;
+    } catch (_) {
+      state.nodes = state.nodes.concat(newNode);
+    }
+    buildMap();
+    const added = state.nodes.find((n) => n.id === newNode.id);
+    if (added) ensureNodeTitle(added);
+    showToast("已在本板块下生成新问题", "blue");
+  } catch (e) {
+    console.error(e);
+    showToast(e && e.message ? e.message : "生成失败", "red");
+  }
 }
 
 // 基于已回答节点生成新问题：长按并拖动该节点触发
@@ -718,6 +869,7 @@ async function chooseTip(nodeId, content) {
   } catch (e) {
     console.error(e);
     showToast("应用 Tips 失败", "red");
+    throw e;
   }
 }
 
@@ -731,7 +883,7 @@ async function generateAnswerCandidatesForQuestion(node) {
     questionFloatText.className =
       "grid grid-cols-1 gap-4 text-sm leading-relaxed max-h-[50vh] overflow-y-auto custom-scrollbar pr-1";
     questionFloatText.innerHTML =
-      '<div class="col-span-full text-sm text-gray-400">正在为你生成参考答案…</div>';
+      '<div class="col-span-full flex items-center justify-center gap-3 py-8 text-sm text-gray-400"><span class="inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></span>正在为你生成参考答案…</div>';
   }
 
   try {
@@ -754,7 +906,7 @@ async function generateAnswerCandidatesForQuestion(node) {
     cands.forEach((content, idx) => {
       const wrapper = document.createElement("div");
       wrapper.className =
-        "p-5 rounded-2xl bg-white/90 border border-blue-100 text-sm text-gray-800 flex flex-col gap-3";
+        "candidate-answer-card p-5 rounded-2xl bg-white/90 border border-blue-100 text-sm text-gray-800 flex flex-col gap-3";
 
       const titleRow = document.createElement("div");
       titleRow.className = "flex items-center justify-between gap-2";
@@ -785,7 +937,7 @@ async function generateAnswerCandidatesForQuestion(node) {
       titleRow.appendChild(btnRow);
 
       const textDiv = document.createElement("div");
-      textDiv.className = "leading-relaxed text-sm";
+      textDiv.className = "candidate-answer-card-content leading-relaxed text-sm text-gray-800";
       textDiv.textContent = content;
 
       wrapper.appendChild(titleRow);
@@ -797,7 +949,7 @@ async function generateAnswerCandidatesForQuestion(node) {
     console.error(e);
     if (questionFloatText) {
       questionFloatText.innerHTML =
-        '<div class="text-sm text-red-500">生成参考答案时出错，请稍后重试。</div>';
+        '<div class="col-span-full text-sm text-red-500">生成参考答案时出错，请稍后重试。</div>';
     }
   } finally {
     state.tipsLoading[nodeId] = false;
@@ -810,19 +962,38 @@ async function createTipFromQuestion(nodeId, content) {
   const trimmed = (content || "").trim();
   if (!trimmed) return;
 
+  let newNode;
   try {
-    const newNode = await apiJson(
+    newNode = await apiJson(
       `/api/projects/${state.projectId}/nodes/${nodeId}/tips`,
       {
         method: "POST",
       },
     );
-
-    // 后端目前会返回“信息待选择”的 Tip 节点，这里直接调用 chooseTip 固化内容
-    await chooseTip(newNode.id, trimmed);
   } catch (e) {
     console.error(e);
     showToast("创建 Tips 节点失败", "red");
+    return;
+  }
+
+  if (!newNode || !newNode.id) {
+    showToast("创建 Tips 节点失败：返回数据异常", "red");
+    return;
+  }
+
+  // 先刷新树，让新 Tips 节点立刻出现在脑图上
+  try {
+    const project = await apiJson(`/api/projects/${state.projectId}`);
+    state.nodes = project.nodes || state.nodes;
+    buildMap();
+  } catch (_) {}
+
+  // 再调用 chooseTip 把选中的文案固化到该 Tips 节点
+  try {
+    await chooseTip(newNode.id, trimmed);
+  } catch (e) {
+    console.error(e);
+    showToast("Tips 节点已创建，但应用内容失败，请点击该节点重试", "red");
   }
 }
 
@@ -894,7 +1065,11 @@ function handleContextMenuClick(action) {
       enterAnswerModeForNode(node);
     }
   } else if (action === "spawn") {
-    triggerSpawnFromNode(nodeId);
+    if (node.node_type === "section") {
+      triggerSectionQuestionFromNode(nodeId);
+    } else {
+      triggerSpawnFromNode(nodeId);
+    }
   } else if (action === "tips") {
     // 右键 Tips：根据是否已回答来决定行为
     if (node.status === "green" || node.status === "ai") {
@@ -911,6 +1086,16 @@ function handleContextMenuClick(action) {
 
 // 底部加号按钮已废除，追问与 Tips 功能统一通过右键菜单触发
 
+function escapeHtml(s) {
+  if (s == null) return "";
+  const t = String(s);
+  return t
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /** 每个问题的 2～7 字标题：正在请求 AI 时显示「命名中…」，否则用已有标题或问题前 7 字 */
 function getNodeShortTitle(node) {
   if (state.fetchingTitle && state.fetchingTitle[node.id]) return "命名中…";
@@ -920,9 +1105,10 @@ function getNodeShortTitle(node) {
   return q ? q.replace(/[？?。！!，,、\s]+$/, "").slice(0, 7) : (t || "节点");
 }
 
-/** 为节点请求 AI 短标题：先显示「命名中…」，返回后更新节点标题与界面 */
+/** 为节点请求 AI 短标题：根节点与板块节点不请求 */
 async function ensureNodeTitle(node) {
   if (!state.projectId || !node || node.level === 0) return;
+  if (node.node_type === "section") return;
   if (state.titled[node.id]) return;
   if (state.fetchingTitle[node.id]) return;
 
@@ -945,7 +1131,7 @@ async function ensureNodeTitle(node) {
     state.nodes = state.nodes.map((n) => (n.id === node.id ? { ...n, title: newTitle } : n));
     state.titled = state.titled || {};
     state.titled[node.id] = true;
-    if (document.getElementById(`node-${node.id}`)) document.getElementById(`node-${node.id}`).textContent = newTitle;
+    if (nodeEl && node.node_type !== "section" && node.level !== 0) nodeEl.textContent = newTitle;
     if (questionFloatTitle && state.activeId === node.id) questionFloatTitle.textContent = newTitle;
     if (activeNodeName && state.activeId === node.id) activeNodeName.innerText = newTitle;
   } catch (e) {
@@ -958,7 +1144,8 @@ async function ensureNodeTitle(node) {
   }
 }
 
-function selectNode(id) {
+function selectNode(id, options = {}) {
+  const { panToCenter = true } = options;
   const node = state.nodes.find((n) => n.id === id);
   if (!node) return;
   state.activeId = id;
@@ -972,28 +1159,36 @@ function selectNode(id) {
   if (questionFloat && questionFloatTitle && questionFloatText) {
     const shortTitle = getNodeShortTitle(node);
     questionFloatTitle.textContent = shortTitle;
-    // 只让内部卡片接收点击，外层容器保持 pointer-events:none，避免挡住画布
-    questionFloat.classList.remove("opacity-0", "translate-y-2");
+    // 显示时整条问题浮层可交互（可点击、可滚动），否则子元素 pointer-events-none 会导致点击穿透到画布
+    questionFloat.classList.remove("opacity-0", "translate-y-2", "pointer-events-none");
+    questionFloat.classList.add("pointer-events-auto");
     if (questionFloatCard) {
       questionFloatCard.classList.remove("pointer-events-none");
+      questionFloatCard.classList.add("pointer-events-auto");
     }
 
-    if (isTip && node.question === "信息待选择") {
-      // Tips 节点且尚未选择内容：在问题框中展示可点击的 Tips 卡片
+    if (node.node_type === "section") {
+      questionFloatText.className = "text-white/80 font-medium text-sm leading-relaxed";
+      questionFloatText.textContent = `本板块：${title}。请选择下方具体问题作答。`;
+      if (nodePanel) {
+        nodePanel.classList.add("translate-y-32", "opacity-0", "pointer-events-none");
+        nodePanel.classList.remove("pointer-events-auto");
+      }
+    } else if (isTip && node.question === "信息待选择") {
       renderTipsCandidates(node);
       if (!state.tipsCandidates[node.id] && !state.tipsLoading[node.id]) {
         loadTipsCandidates(node);
       }
     } else {
-      // 普通问题节点或已选定的 Tips：展示完整文本
       questionFloatText.className =
         "text-gray-700 font-medium text-sm leading-relaxed max-h-[50vh] overflow-y-auto custom-scrollbar pr-1";
       questionFloatText.textContent = node.question || "请简要回答。";
     }
   }
 
+  // 仅左键选中时画布平移到中心；右键打开菜单时不跟随
   const pos = canvasInner.querySelector(`#node-${id}`);
-  if (pos) {
+  if (panToCenter && pos) {
     const rect = pos.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
@@ -1030,9 +1225,11 @@ mindmapView.addEventListener("mousedown", (e) => {
   canvasInner.style.transition = "none";
   // 拖动画布时，自动收起当前问题描述浮窗
   if (questionFloat) {
-    questionFloat.classList.add("opacity-0", "translate-y-2");
+    questionFloat.classList.add("opacity-0", "translate-y-2", "pointer-events-none");
+    questionFloat.classList.remove("pointer-events-auto");
     if (questionFloatCard) {
       questionFloatCard.classList.add("pointer-events-none");
+      questionFloatCard.classList.remove("pointer-events-auto");
     }
   }
 });
@@ -1080,6 +1277,30 @@ window.onmouseup = () => {
   canvasInner.style.transition = "transform 0.6s cubic-bezier(0.2, 0, 0.2, 1)";
 };
 
+// 滚轮缩放导图：脑图可见时，在 document 捕获阶段拦截 wheel，避免被其他元素吞掉
+document.addEventListener(
+  "wheel",
+  (e) => {
+    if (!mindmapView || !canvasInner) return;
+    const mindmapVisible =
+      !mindmapView.classList.contains("opacity-0") &&
+      !mindmapView.classList.contains("pointer-events-none");
+    if (!mindmapVisible) return;
+    if (e.target.closest("textarea") || e.target.closest("select") || e.target.closest("#question-float-card")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? -1 : 1;
+    const factor = 1 + delta * 0.12;
+    canvasInner.style.transition = "none";
+    setCanvasScale(state.canvas.scale * factor);
+    clearTimeout(canvasInner._zoomEnd);
+    canvasInner._zoomEnd = setTimeout(() => {
+      canvasInner.style.transition = "transform 0.6s cubic-bezier(0.2, 0, 0.2, 1)";
+    }, 150);
+  },
+  { passive: false, capture: true }
+);
+
 window.addEventListener("click", (e) => {
   if (!contextMenu || contextMenu.classList.contains("hidden")) return;
   if (!e.target.closest || !e.target.closest("#node-context-menu")) {
@@ -1098,8 +1319,17 @@ if (contextMenuButtons && contextMenuButtons.length) {
   });
 }
 
+const CANVAS_SCALE_MIN = 0.25;
+const CANVAS_SCALE_MAX = 3;
+
 function syncCanvas() {
-  canvasInner.style.transform = `translate(calc(-50% + ${state.canvas.x}px), calc(-50% + ${state.canvas.y}px))`;
+  const s = state.canvas.scale;
+  canvasInner.style.transform = `translate(calc(-50% + ${state.canvas.x}px), calc(-50% + ${state.canvas.y}px)) scale(${s})`;
+}
+
+function setCanvasScale(newScale) {
+  state.canvas.scale = Math.max(CANVAS_SCALE_MIN, Math.min(CANVAS_SCALE_MAX, newScale));
+  syncCanvas();
 }
 
 // ----------- 节点作答 & 调用后端 -----------
@@ -1139,7 +1369,8 @@ async function submitAnswer() {
 
     // 回答完成后，自动收起作答框，避免一直占用视野
     if (nodePanel) {
-      nodePanel.classList.add("translate-y-32", "opacity-0");
+      nodePanel.classList.add("translate-y-32", "opacity-0", "pointer-events-none");
+      nodePanel.classList.remove("pointer-events-auto");
     }
     if (nodeInput) {
       nodeInput.value = "";
@@ -1157,7 +1388,8 @@ async function submitAnswer() {
 
 function enterAnswerModeForNode(node) {
   if (!nodePanel || !nodeInput) return;
-  nodePanel.classList.remove("translate-y-32", "opacity-0");
+  nodePanel.classList.remove("translate-y-32", "opacity-0", "pointer-events-none");
+  nodePanel.classList.add("pointer-events-auto");
   activeNodeName.innerText = getNodeShortTitle(node);
   nodeInput.disabled = false;
   nodeInput.placeholder = "在此输入你的回答…";
@@ -1170,7 +1402,8 @@ function enterAnswerModeForNode(node) {
 
 function enterViewModeForNode(node) {
   if (!nodePanel || !nodeInput) return;
-  nodePanel.classList.remove("translate-y-32", "opacity-0");
+  nodePanel.classList.remove("translate-y-32", "opacity-0", "pointer-events-none");
+  nodePanel.classList.add("pointer-events-auto");
   activeNodeName.innerText = getNodeShortTitle(node);
   nodeInput.value = "";
   nodeInput.disabled = true;
@@ -1286,13 +1519,17 @@ async function loadSkills() {
     const list = res.skills || [];
     state.skills = list;
     if (skillSelect) {
-      skillSelect.innerHTML = '<option value="">无（通用）</option>';
+      skillSelect.innerHTML = "";
       list.forEach((s) => {
         const opt = document.createElement("option");
         opt.value = s.id;
         opt.textContent = s.name || s.id;
         skillSelect.appendChild(opt);
       });
+      if (list.length > 0) {
+        skillSelect.value = list[0].id;
+        state.skillId = list[0].id;
+      }
       skillSelect.addEventListener("change", () => {
         state.skillId = skillSelect.value || null;
       });

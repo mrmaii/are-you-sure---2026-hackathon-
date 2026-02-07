@@ -15,14 +15,15 @@ def init_db() -> None:
   from . import models  # noqa: F401
 
   SQLModel.metadata.create_all(engine)
-  # 兼容旧库：为 project 表补 skill_id 列（若已存在则忽略）
+  # 兼容旧库：补 skill_id 列（若已存在则忽略）
   if "sqlite" in DATABASE_URL:
-    try:
-      with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE project ADD COLUMN skill_id TEXT"))
-        conn.commit()
-    except Exception:
-      pass
+    for table, col in (("project", "skill_id"), ("node", "skill_id")):
+      try:
+        with engine.connect() as conn:
+          conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} TEXT"))
+          conn.commit()
+      except Exception:
+        pass
 
 
 def get_session() -> Session:

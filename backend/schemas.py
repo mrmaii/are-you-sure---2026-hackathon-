@@ -28,6 +28,7 @@ class NodeOut(SQLModel):
   status: str
   order_index: int
   node_type: Optional[str] = "question"
+  skill_id: Optional[str] = None
 
 
 class ProgressOut(BaseModel):

@@ -45,6 +45,7 @@ class NodeBase(SQLModel):
   status: str = "red"  # red / green
   order_index: int = 0
   node_type: str = "question"  # question | tip
+  skill_id: Optional[str] = None  # 分区 Skills：该节点及其子节点使用此 skill 强化
 
 
 class Node(NodeBase, table=True):

@@ -14,14 +14,21 @@
             --google-green: #34A853;
             --bg-light: #FFFFFF;
         }
+        html, body { height: 100%; }
 
         body {
             background-color: var(--bg-light);
             font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
             overflow: hidden;
-            cursor: none; /* 使用自定义玻璃指示器替代系统光标 */
+            cursor: none;
             user-select: none;
             -webkit-user-select: none;
+            outline: none;
+            border: none;
+        }
+        main, main:focus {
+            outline: none !important;
+            border: none !important;
         }
         /* 输入区域允许选中与粘贴，避免屏蔽后无法操作 */
         input, textarea, [contenteditable="true"] {
@@ -68,6 +75,14 @@
             border: 1px solid rgba(255, 255, 255, 0.4);
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05);
         }
+        /* Toast 收回时完全移出视口，避免顶部残留 */
+        #toast.toast-retracted {
+            transform: translate(-50%, calc(-100% - 24px));
+            visibility: hidden;
+        }
+        #toast:not(.toast-retracted) {
+            visibility: visible;
+        }
 
         /* 节点样式 */
         .node {
@@ -83,21 +98,24 @@
         }
 
         .node-red {
-            border: 3px solid var(--google-red);
+            border: 2px solid rgba(234, 67, 53, 0.45);
             background: #FFF;
             color: var(--google-red);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
         }
 
         .node-green {
             background: var(--google-green);
             color: white;
-            border: 3px solid var(--google-green);
+            border: 2px solid var(--google-green);
+            box-shadow: 0 4px 14px rgba(52, 168, 83, 0.25);
         }
 
         .node-tip {
             background: #E3F2FD;
             color: #1E88E5;
-            border: 3px solid #1E88E5;
+            border: 2px solid rgba(30, 136, 229, 0.5);
+            box-shadow: 0 4px 14px rgba(30, 136, 229, 0.12);
         }
 
         .node-active {
@@ -135,26 +153,66 @@
             animation: pulse-red 2s infinite;
         }
 
-        /* 画布系统 */
+        /* 用户侧边栏 */
+        #sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        #sidebar.open {
+            transform: translateX(0);
+            box-shadow: 8px 0 24px rgba(0,0,0,0.12);
+        }
+        /* 侧边栏打开时隐藏左上角按钮，避免遮挡侧边栏内容 */
+        #sidebar-toggle.sidebar-toggle-hidden,
+        body:has(#sidebar.open) #sidebar-toggle {
+            opacity: 0;
+            pointer-events: none;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+        }
+        #sidebar-backdrop {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+        }
+        #sidebar-backdrop.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .mode-option {
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .mode-option.disabled {
+            opacity: 0.6;
+        }
+
+        /* 画布系统：无外框、无焦点轮廓 */
+        #mindmap-view,
+        #mindmap-view:focus,
+        #canvas-container,
+        #canvas-container:focus,
+        #canvas-inner,
+        #canvas-inner:focus {
+            outline: none !important;
+            border: none !important;
+        }
         #canvas-container {
             width: 100%; height: 100%;
             overflow: hidden;
             position: relative;
             cursor: grab;
-            /* 使用公开的高清地形等高线 SVG 作为底图（来自开源图库，如 SVG Repo） */
-            background-color: #f8fafc;
+            background-color: #f1f5f9;
             background-image: url("https://www.svgrepo.com/download/399308/topography.svg");
             background-size: cover;
             background-repeat: no-repeat;
             background-position: center;
-            opacity: 0.9;
+            opacity: 0.92;
         }
-
         #canvas-container:active { cursor: grabbing; }
-
         #canvas-inner {
             width: 4000px; height: 4000px;
             position: absolute;
+            transform-origin: 50% 50%;
             transition: transform 0.6s cubic-bezier(0.2, 0, 0.2, 1);
             z-index: 1;
         }
@@ -213,11 +271,241 @@
             transform: translate(-50%, -50%);
             will-change: transform;
         }
+
+        /* ========== 黑客松模式：暗色 + 酸性/黑客感主题 ========== */
+        .theme-hackathon {
+            --hackathon-bg: #0a0a0f;
+            --hackathon-surface: rgba(14, 14, 22, 0.88);
+            --hackathon-cyan: #00fff9;
+            --hackathon-green: #00ff88;
+            --hackathon-magenta: #b24bf3;
+            --hackathon-blue: #00d4ff;
+            --hackathon-text: #e2e8f0;
+            --hackathon-muted: #64748b;
+            --hackathon-border: rgba(0, 255, 249, 0.2);
+        }
+        body.theme-hackathon {
+            background-color: var(--hackathon-bg) !important;
+        }
+        body.theme-hackathon .contour-bg {
+            opacity: 0.06;
+            background-image: url("data:image/svg+xml,%3Csvg width='1200' height='1200' viewBox='0 0 1000 1000' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 500 Q 250 400 500 500 T 1000 500' fill='none' stroke='%2300fff9' stroke-width='0.8'/%3E%3Cpath d='M0 600 Q 250 500 500 600 T 1000 600' fill='none' stroke='%2300ff88' stroke-width='0.8'/%3E%3Cpath d='M0 400 Q 250 300 500 400 T 1000 400' fill='none' stroke='%23b24bf3' stroke-width='0.8'/%3E%3C/svg%3E");
+        }
+        body.theme-hackathon .glass {
+            background: var(--hackathon-surface);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--hackathon-border);
+            box-shadow: 0 0 40px rgba(0, 255, 249, 0.06), inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+        /* 画布：暗底 + 科技感网格 */
+        body.theme-hackathon #canvas-container {
+            background-color: #06060a !important;
+            background-image: 
+                linear-gradient(rgba(0, 255, 249, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 249, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px;
+            opacity: 1;
+        }
+        /* 节点：暗玻璃 + 霓虹描边，去掉土味红框 */
+        body.theme-hackathon .node {
+            background: rgba(12, 12, 20, 0.92) !important;
+            border: 1px solid rgba(0, 255, 249, 0.25) !important;
+            box-shadow: 
+                0 0 0 1px rgba(0, 255, 249, 0.1),
+                0 8px 32px rgba(0, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255,255,255,0.03) !important;
+            color: var(--hackathon-text) !important;
+            transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.2);
+        }
+        body.theme-hackathon .node:hover {
+            border-color: rgba(0, 255, 249, 0.5) !important;
+            box-shadow: 
+                0 0 24px rgba(0, 255, 249, 0.2),
+                0 0 0 1px rgba(0, 255, 249, 0.3),
+                0 12px 40px rgba(0, 0, 0, 0.35) !important;
+        }
+        body.theme-hackathon .node-red {
+            border-color: rgba(0, 255, 249, 0.35) !important;
+            color: var(--hackathon-cyan) !important;
+            box-shadow: 
+                0 0 0 1px rgba(0, 255, 249, 0.15),
+                0 0 20px rgba(0, 255, 249, 0.08),
+                0 8px 32px rgba(0, 0, 0, 0.4) !important;
+        }
+        body.theme-hackathon .node-green {
+            border-color: rgba(0, 255, 136, 0.5) !important;
+            color: var(--hackathon-green) !important;
+            box-shadow: 
+                0 0 0 1px rgba(0, 255, 136, 0.2),
+                0 0 24px rgba(0, 255, 136, 0.15),
+                0 8px 32px rgba(0, 0, 0, 0.4) !important;
+        }
+        body.theme-hackathon .node-tip {
+            border-color: rgba(0, 212, 255, 0.4) !important;
+            color: var(--hackathon-blue) !important;
+            box-shadow: 
+                0 0 0 1px rgba(0, 212, 255, 0.15),
+                0 0 20px rgba(0, 212, 255, 0.1),
+                0 8px 32px rgba(0, 0, 0, 0.4) !important;
+        }
+        body.theme-hackathon .node-active {
+            border-color: var(--hackathon-cyan) !important;
+            box-shadow: 
+                0 0 0 2px rgba(0, 255, 249, 0.4),
+                0 0 40px rgba(0, 255, 249, 0.25),
+                0 12px 40px rgba(0, 0, 0, 0.4) !important;
+            z-index: 50 !important;
+        }
+        body.theme-hackathon .pulse-node {
+            animation: pulse-cyan 2s infinite;
+        }
+        @keyframes pulse-cyan {
+            0% { box-shadow: 0 0 0 0 rgba(0, 255, 249, 0.4), 0 8px 32px rgba(0,0,0,0.4); }
+            70% { box-shadow: 0 0 0 14px rgba(0, 255, 249, 0), 0 8px 32px rgba(0,0,0,0.4); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 255, 249, 0), 0 8px 32px rgba(0,0,0,0.4); }
+        }
+        /* 根节点 / 板块节点：图标与文字霓虹色 */
+        body.theme-hackathon .node-root .text-gray-800,
+        body.theme-hackathon .node-root .text-gray-500,
+        body.theme-hackathon .node-section .text-gray-800,
+        body.theme-hackathon .node-section .text-gray-500 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon .node-root [class*="text-[#4285F4]"] { color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon .node-section [class*="text-[#34A853]"] { color: var(--hackathon-green) !important; }
+        /* 连线：霓虹描边 + 发光（由 JS 设置 stroke，此处统一加发光） */
+        body.theme-hackathon #connector-svg path {
+            stroke-linecap: round;
+            filter: drop-shadow(0 0 4px currentColor);
+        }
+        /* 顶栏、输入区、侧边栏、右键菜单等 */
+        body.theme-hackathon #top-bar .font-black.text-gray-900 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon #top-bar .text-gray-400 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #top-bar .text-green-600 { color: var(--hackathon-green) !important; }
+        body.theme-hackathon #top-bar .bg-gray-100 { background: rgba(0, 255, 249, 0.08) !important; }
+        body.theme-hackathon #top-bar .bg-green-500 { background: var(--hackathon-green) !important; }
+        body.theme-hackathon #sidebar { background: var(--hackathon-surface) !important; border-color: var(--hackathon-border) !important; }
+        body.theme-hackathon #sidebar .text-gray-800 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon #sidebar .text-gray-500,
+        body.theme-hackathon #sidebar .text-gray-400 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #sidebar .border-gray-100 { border-color: var(--hackathon-border) !important; }
+        body.theme-hackathon #sidebar .hover\\:bg-gray-100:hover { background: rgba(0, 255, 249, 0.08) !important; }
+        body.theme-hackathon #sidebar .hover\\:bg-gray-50:hover { background: rgba(0, 255, 249, 0.06) !important; }
+        body.theme-hackathon #node-context-menu {
+            background: var(--hackathon-surface) !important;
+            border: 1px solid var(--hackathon-border);
+            box-shadow: 0 0 40px rgba(0, 255, 249, 0.1);
+        }
+        body.theme-hackathon #node-context-menu button {
+            color: var(--hackathon-text) !important;
+        }
+        body.theme-hackathon #node-context-menu button:hover {
+            background: rgba(0, 255, 249, 0.12) !important;
+        }
+        body.theme-hackathon #question-float-card .text-gray-800,
+        body.theme-hackathon #question-float-card .text-gray-700 { color: var(--hackathon-text) !important; }
+        /* 候选答案卡片：保持深色正文，避免浅字在浅灰底上不可见 */
+        body.theme-hackathon #question-float-card .candidate-answer-card,
+        body.theme-hackathon #question-float-card .candidate-answer-card-content { color: #1e293b !important; }
+        body.theme-hackathon #question-float-card .candidate-answer-card .text-blue-600 { color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon #question-float-card [class*="bg-[#4285F4]"] { background: rgba(0, 255, 249, 0.15) !important; }
+        body.theme-hackathon #question-float-card [class*="text-[#4285F4]"] { color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon #node-panel .text-gray-800,
+        body.theme-hackathon #node-panel .text-gray-500 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon #node-panel .text-gray-400 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #initial-input,
+        body.theme-hackathon #node-panel textarea {
+            color: var(--hackathon-text) !important;
+            background: transparent !important;
+        }
+        body.theme-hackathon #initial-input::placeholder,
+        body.theme-hackathon #node-panel textarea::placeholder { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon .text-google-gradient {
+            background: linear-gradient(to right, var(--hackathon-cyan), var(--hackathon-magenta), var(--hackathon-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        body.theme-hackathon #hero-section .bg-white { background: var(--hackathon-surface) !important; border: 1px solid var(--hackathon-border); }
+        body.theme-hackathon #hero-section .text-gray-400 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #drop-zone { background: rgba(0, 255, 249, 0.04) !important; border-color: var(--hackathon-border) !important; }
+        body.theme-hackathon #drop-zone .text-gray-500,
+        body.theme-hackathon #drop-zone .text-gray-400 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #drop-zone [class*="text-[#4285F4]"] { color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon #drop-zone:hover { border-color: rgba(0, 255, 249, 0.4) !important; background: rgba(0, 255, 249, 0.08) !important; }
+        body.theme-hackathon #start-btn { background: linear-gradient(135deg, var(--hackathon-cyan), var(--hackathon-blue)) !important; box-shadow: 0 0 24px rgba(0, 255, 249, 0.3); }
+        body.theme-hackathon #sidebar-toggle { background: var(--hackathon-surface) !important; border-color: var(--hackathon-border); color: var(--hackathon-text) !important; }
+        body.theme-hackathon #sidebar-toggle:hover { color: var(--hackathon-cyan) !important; background: rgba(0, 255, 249, 0.1) !important; }
+        body.theme-hackathon #glass-cursor {
+            border-color: rgba(0, 255, 249, 0.5);
+            box-shadow: 0 0 12px rgba(0, 255, 249, 0.2);
+        }
+        body.theme-hackathon #chat-history .text-gray-800 { color: var(--hackathon-text) !important; }
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col items-center justify-center">
+    <script>try{var _m=localStorage.getItem('app_mode');if(!_m||_m==='hackathon')document.body.classList.add('theme-hackathon');}catch(_e){document.body.classList.add('theme-hackathon');}</script>
     <div class="contour-bg"></div>
     <div id="glass-cursor"></div>
+
+    <!-- 左上角：展开侧边栏按钮 -->
+    <button type="button" id="sidebar-toggle" aria-label="打开菜单" class="fixed top-6 left-6 z-[110] w-12 h-12 rounded-2xl glass flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-white/80 transition-all shadow-lg border border-white/50">
+        <i class="fas fa-bars text-xl"></i>
+    </button>
+
+    <!-- 侧边栏遮罩（点击关闭） -->
+    <div id="sidebar-backdrop" class="fixed inset-0 bg-black/25 z-[108]"></div>
+
+    <!-- 用户侧边栏 -->
+    <aside id="sidebar" class="fixed left-0 top-0 h-full w-72 bg-white z-[109] flex flex-col border-r border-gray-100">
+        <div class="flex items-center justify-between p-4 border-b border-gray-100">
+            <span class="font-bold text-gray-800">菜单</span>
+            <button type="button" id="sidebar-close" aria-label="关闭" class="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <!-- 演示个人账户 -->
+        <div class="p-4 border-b border-gray-100">
+            <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-full bg-gradient-to-br from-[#4285F4] to-[#34A853] flex items-center justify-center text-white text-lg font-bold shadow-md">
+                    演
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-gray-800 truncate">演示用户</p>
+                    <p class="text-xs text-gray-500 truncate">demo@mindbridge.ai</p>
+                </div>
+            </div>
+            <p class="text-[11px] text-gray-400 mt-2 px-1">仅用于产品演示，无需登录</p>
+        </div>
+        <!-- 设置：模式切换 -->
+        <div class="flex-1 overflow-y-auto p-4">
+            <h3 class="text-[11px] font-black uppercase tracking-wider text-gray-400 mb-3">工作模式</h3>
+            <div class="space-y-1">
+                <label class="mode-option disabled flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-gray-50 opacity-75" data-mode="screenplay">
+                    <span class="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400"><i class="fas fa-film text-sm"></i></span>
+                    <span class="flex-1 font-medium text-gray-700">编剧模式</span>
+                    <span class="text-[10px] text-gray-400">即将推出</span>
+                </label>
+                <label class="mode-option flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-gray-50 bg-[#4285F4]/10 border border-[#4285F4]/20" data-mode="hackathon">
+                    <span class="w-8 h-8 rounded-lg bg-[#4285F4]/20 flex items-center justify-center text-[#4285F4]"><i class="fas fa-trophy text-sm"></i></span>
+                    <span class="flex-1 font-semibold text-gray-900">黑客松模式</span>
+                    <span class="text-[10px] text-[#4285F4] font-medium">当前</span>
+                </label>
+                <label class="mode-option disabled flex items-center gap-3 p-3 rounded-xl cursor-not-allowed opacity-75" data-mode="developer">
+                    <span class="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400"><i class="fas fa-code text-sm"></i></span>
+                    <span class="flex-1 font-medium text-gray-600">开发者模式</span>
+                    <span class="text-[10px] text-gray-400">即将推出</span>
+                </label>
+                <label class="mode-option disabled flex items-center gap-3 p-3 rounded-xl cursor-not-allowed opacity-75" data-mode="essay">
+                    <span class="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400"><i class="fas fa-pen-fancy text-sm"></i></span>
+                    <span class="flex-1 font-medium text-gray-600">文章辅导模式</span>
+                    <span class="text-[10px] text-gray-400">即将推出</span>
+                </label>
+            </div>
+        </div>
+        <div class="p-4 border-t border-gray-100 text-center text-[11px] text-gray-400">
+            MindBridge AI · 当前为黑客松竞赛演示
+        </div>
+    </aside>
 
     <!-- 顶栏：项目名 + 进度 + 融合按钮 -->
     <header id="top-bar" class="fixed top-8 left-1/2 -translate-x-1/2 w-[92%] max-w-7xl z-[100] opacity-0 transition-all duration-1000 -translate-y-8 pointer-events-none">
@@ -259,7 +547,7 @@
 
     <main class="w-full h-full relative">
         <!-- 阶段 1：立项对话 -->
-        <section id="chat-view" class="w-full h-full flex flex-col items-center px-6 pt-8 pb-6">
+        <section id="chat-view" class="w-full h-full min-h-0 flex flex-col items-center px-6 pt-8 pb-6 overflow-hidden">
             <!-- 首屏标题 -->
             <div id="hero-section" class="hero-section text-center mb-10 space-y-6 flex-shrink-0 w-full max-w-5xl mx-auto">
                 <div class="inline-flex p-8 rounded-[40px] bg-white shadow-2xl shadow-gray-100 mb-6 scale-110 relative group">
@@ -284,14 +572,6 @@
 
             <!-- 对话历史 -->
             <div id="chat-history" class="w-full max-w-[min(96rem,95vw)] flex-1 min-h-0 space-y-4 mb-4 overflow-y-auto max-h-[75vh] px-4 py-2 custom-scrollbar"></div>
-
-            <!-- Agent Skills：选择场景/技能以优化回答质量 -->
-            <div class="w-full max-w-[min(96rem,95vw)] flex-shrink-0 flex items-center gap-3 mb-3">
-                <span class="text-gray-500 font-medium text-sm">场景/技能</span>
-                <select id="skill-select" class="flex-1 max-w-xs rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm text-gray-700 focus:border-[#4285F4] focus:outline-none">
-                    <option value="">无（通用）</option>
-                </select>
-            </div>
 
             <!-- 底部输入 -->
             <div class="w-full max-w-[min(96rem,95vw)] flex-shrink-0 glass rounded-[28px] p-4 flex items-center gap-4 shadow-2xl transition-all hover:shadow-blue-100/50 group">
@@ -319,8 +599,8 @@
                 <button data-action="tips" class="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-lg">Tips</button>
             </div>
 
-            <!-- 底部：当前问题说明 + 作答框 -->
-            <div class="fixed bottom-10 left-1/2 -translate-x-1/2 w-full max-w-6xl px-8 flex flex-col gap-4 items-center">
+            <!-- 底部：当前问题说明 + 作答框；容器 pointer-events-none 避免挡住下半区节点，子元素在显示时由 JS 恢复可点 -->
+            <div id="mindmap-bottom-bar" class="fixed bottom-10 left-1/2 -translate-x-1/2 w-full max-w-6xl px-8 flex flex-col gap-4 items-center z-10 pointer-events-none">
                 <div id="question-float" class="w-full flex justify-start opacity-0 pointer-events-none transition-all duration-300 translate-y-2">
                     <div id="question-float-card" class="glass rounded-[28px] p-5 shadow-2xl border border-white/50 w-[420px] max-w-[420px] pointer-events-none">
                         <div class="flex items-center gap-3 mb-3">
@@ -331,7 +611,7 @@
                     </div>
                 </div>
                 <!-- 作答框 -->
-                <div id="node-panel" class="w-full glass rounded-[40px] p-6 shadow-2xl flex items-center gap-6 translate-y-32 opacity-0 transition-all duration-700">
+                <div id="node-panel" class="w-full glass rounded-[40px] p-6 shadow-2xl flex items-center gap-6 translate-y-32 opacity-0 pointer-events-none transition-all duration-700">
                     <div class="w-20 h-20 rounded-[28px] bg-gradient-to-br from-[#4285F4] to-[#EA4335] flex items-center justify-center flex-shrink-0 shadow-lg">
                         <i class="fas fa-feather-pointed text-white text-3xl"></i>
                     </div>
@@ -372,17 +652,76 @@
         </div>
     </div>
 
-    <!-- Toast 提示 -->
-    <div id="toast" class="fixed top-12 right-12 glass px-8 py-5 rounded-[28px] shadow-2xl transition-all duration-500 translate-x-20 opacity-0 flex items-center gap-5 z-[300]">
-        <div id="toast-icon" class="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg"></div>
-        <div class="flex flex-col">
-            <span class="text-[10px] font-black text-gray-300 uppercase tracking-widest">AI Agent Message</span>
+    <!-- Toast 提示：从顶部滑入再滑出，收回时完全移出视口避免残留 -->
+    <div id="toast" class="fixed left-1/2 top-0 -translate-x-1/2 mt-6 glass px-8 py-5 rounded-2xl shadow-2xl transition-transform duration-300 ease-out flex items-center gap-5 z-[300] toast-slide toast-retracted">
+        <div id="toast-icon" class="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg flex-shrink-0"></div>
+        <div class="flex flex-col min-w-0">
+            <span class="text-[10px] font-black text-gray-400 uppercase tracking-widest">提示</span>
             <span id="toast-text" class="text-base font-bold text-gray-800"></span>
         </div>
     </div>
 
     <script type="module" src="./frontend/main.js"></script>
     <script>
+        // 侧边栏：展开/收起
+        (function () {
+            var sidebar = document.getElementById('sidebar');
+            var backdrop = document.getElementById('sidebar-backdrop');
+            var toggle = document.getElementById('sidebar-toggle');
+            var closeBtn = document.getElementById('sidebar-close');
+            if (!sidebar || !backdrop || !toggle) return;
+
+            function openSidebar() {
+                sidebar.classList.add('open');
+                backdrop.classList.add('open');
+                if (toggle) toggle.classList.add('sidebar-toggle-hidden');
+            }
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                backdrop.classList.remove('open');
+                if (toggle) toggle.classList.remove('sidebar-toggle-hidden');
+            }
+
+            toggle.addEventListener('click', openSidebar);
+            closeBtn && closeBtn.addEventListener('click', closeSidebar);
+            backdrop.addEventListener('click', closeSidebar);
+
+            // 模式选项：仅黑客松可用，其它点击提示即将推出
+            document.querySelectorAll('.mode-option[data-mode]').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    var mode = el.getAttribute('data-mode');
+                    if (mode === 'hackathon') {
+                        document.body.classList.add('theme-hackathon');
+                        document.querySelectorAll('.mode-option[data-mode]').forEach(function (o) {
+                            o.classList.remove('bg-[#4285F4]/10', 'border', 'border-[#4285F4]/20');
+                            o.classList.add('disabled');
+                            o.querySelector('span:last-child') && (o.querySelector('span:last-child').textContent = '');
+                        });
+                        el.classList.remove('disabled');
+                        el.classList.add('bg-[#4285F4]/10', 'border', 'border-[#4285F4]/20');
+                        var label = el.querySelector('span:last-child');
+                        if (label) label.textContent = '当前';
+                        try { localStorage.setItem('app_mode', 'hackathon'); } catch (e) {}
+                        return;
+                    }
+                    if (el.classList.contains('disabled')) {
+                        if (window.showToast) window.showToast('该模式即将推出，敬请期待。', 'blue');
+                    }
+                });
+            });
+
+            // 根据当前模式应用主题（默认黑客松）
+            (function applyThemeFromMode() {
+                var mode = '';
+                try { mode = localStorage.getItem('app_mode') || 'hackathon'; } catch (e) { mode = 'hackathon'; }
+                if (mode === 'hackathon') {
+                    document.body.classList.add('theme-hackathon');
+                } else {
+                    document.body.classList.remove('theme-hackathon');
+                }
+            })();
+        })();
+
         // 玻璃质感鼠标指示器，带轻微跟随延迟
         (function () {
             const cursor = document.getElementById('glass-cursor');

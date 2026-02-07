@@ -44,7 +44,9 @@ from .services import (
   create_project_from_idea,
   draft_append_message,
   flatten_nodes,
+  get_skill_content_for_node,
   spawn_followup_node,
+  spawn_section_question,
   spawn_tips_node,
 )
 from .skills import get_skill_content, list_skills
@@ -102,6 +104,7 @@ def _project_to_out(project: Project, nodes: List[Node]) -> ProjectOut:
         status=n.status,
         order_index=n.order_index,
         node_type=getattr(n, "node_type", "question"),
+        skill_id=getattr(n, "skill_id", None),
       )
       for n in flat
     ],
@@ -265,6 +268,7 @@ async def answer_node(
         status=n.status,
         order_index=n.order_index,
         node_type=getattr(n, "node_type", "question"),
+        skill_id=getattr(n, "skill_id", None),
       )
       for n in added_nodes
     ]
@@ -310,6 +314,46 @@ async def spawn_node(
     question=new_node.question,
     status=new_node.status,
     order_index=new_node.order_index,
+    node_type=getattr(new_node, "node_type", "question"),
+    skill_id=getattr(new_node, "skill_id", None),
+  )
+
+
+@app.post(
+  "/api/projects/{project_id}/nodes/{node_id}/spawn-section-question",
+  response_model=NodeOut,
+)
+async def spawn_section_question_endpoint(
+  project_id: str,
+  node_id: str,
+  session: Session = Depends(get_session),
+) -> NodeOut:
+  """黑客松：在文件夹板块下生成一个由该板块 Skills 指导的新问题（仅追问）。"""
+  try:
+    new_node = await spawn_section_question(
+      session, project_id, node_id, ai_client=AIClient()
+    )
+  except ValueError as e:  # noqa: B902
+    msg = str(e)
+    if msg == "project_not_found":
+      raise HTTPException(status_code=404, detail="project_not_found")
+    if msg == "node_not_found":
+      raise HTTPException(status_code=404, detail="node_not_found")
+    if msg == "not_section_node":
+      raise HTTPException(status_code=400, detail="not_section_node")
+    raise
+
+  return NodeOut(
+    id=new_node.id,
+    project_id=new_node.project_id,
+    parent_id=new_node.parent_id,
+    level=new_node.level,
+    title=new_node.title,
+    question=new_node.question,
+    status=new_node.status,
+    order_index=new_node.order_index,
+    node_type=getattr(new_node, "node_type", "question"),
+    skill_id=getattr(new_node, "skill_id", None),
   )
 
 
@@ -347,6 +391,7 @@ async def spawn_tips(
     status=new_node.status,
     order_index=new_node.order_index,
     node_type=new_node.node_type,
+    skill_id=getattr(new_node, "skill_id", None),
   )
 
 
@@ -368,9 +413,8 @@ async def get_tips_candidates(
     raise HTTPException(status_code=404, detail="node_not_found")
 
   ai = AIClient()
-  skill_content = get_skill_content(getattr(project, "skill_id", None))
+  skill_content = get_skill_content_for_node(session, project_id, node_id)
 
-  # 对于 Tips 节点：基于父节点 + 父节点最新回答生成补充 Tips
   if getattr(node, "node_type", "question") == "tip":
     parent = session.get(Node, node.parent_id) if node.parent_id else None
     if not parent:
@@ -383,7 +427,6 @@ async def get_tips_candidates(
       project.idea_text, parent.question, latest_answer_text, skill_content=skill_content
     )
   else:
-    # 对于普通问题节点：基于问题本身 +（可选）已有回答，生成「可能的回答」候选
     latest_answer = session.exec(
       select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
     ).first()
@@ -437,6 +480,7 @@ async def choose_tip(
     status=node.status,
     order_index=node.order_index,
     node_type=node.node_type,
+    skill_id=getattr(node, "skill_id", None),
   )
 
 
