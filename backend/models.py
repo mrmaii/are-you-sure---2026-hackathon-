@@ -27,6 +27,7 @@ class ProjectBase(SQLModel):
   mode: str = "detail"  # brief | detail | deep
   max_questions: int = 20
   current_questions: int = 0
+  skill_id: Optional[str] = None  # Agent Skills：预存/导入的 Markdown 技能 id
 
 
 class Project(ProjectBase, table=True):

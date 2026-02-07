@@ -47,6 +47,7 @@ from .services import (
   spawn_followup_node,
   spawn_tips_node,
 )
+from .skills import get_skill_content, list_skills
 
 
 app = FastAPI(title="AI Mindmap Backend")
@@ -74,6 +75,12 @@ def health() -> dict:
   return {"status": "ok"}
 
 
+@app.get("/api/skills")
+def api_list_skills() -> dict:
+  """列出所有可用 Agent Skills（skills/*.md）。"""
+  return {"skills": list_skills()}
+
+
 def _project_to_out(project: Project, nodes: List[Node]) -> ProjectOut:
   flat = flatten_nodes(nodes)
   total, green, percent = calc_progress(flat)
@@ -99,6 +106,7 @@ def _project_to_out(project: Project, nodes: List[Node]) -> ProjectOut:
       for n in flat
     ],
     progress=ProgressOut(total=total, green=green, percent=percent),
+    skill_id=getattr(project, "skill_id", None),
   )
 
 
@@ -119,7 +127,11 @@ async def api_draft_message(
 ) -> DraftMessageResponse:
   try:
     need_more, reply, title, initial_questions = await draft_append_message(
-      session, draft_id, payload.content, ai_client=AIClient()
+      session,
+      draft_id,
+      payload.content,
+      ai_client=AIClient(),
+      skill_id=payload.skill_id,
     )
   except ValueError as e:
     if str(e) == "draft_not_found":
@@ -141,7 +153,12 @@ async def api_create_project_from_draft(
   session: Session = Depends(get_session),
 ) -> ProjectOut:
   try:
-    project = await create_project_from_draft(session, payload.draft_id, ai_client=AIClient())
+    project = await create_project_from_draft(
+      session,
+      payload.draft_id,
+      ai_client=AIClient(),
+      skill_id=payload.skill_id,
+    )
   except ValueError as e:
     if str(e) == "draft_not_found":
       raise HTTPException(status_code=404, detail="draft_not_found")
@@ -159,7 +176,13 @@ async def init_project(
 ) -> ProjectOut:
   idea_text = payload.ideaText
   dialog_pairs = [(m.role, m.text) for m in payload.dialog]
-  project = await create_project_from_idea(session, idea_text, dialog_pairs, ai_client=AIClient())
+  project = await create_project_from_idea(
+    session,
+    idea_text,
+    dialog_pairs,
+    ai_client=AIClient(),
+    skill_id=payload.skill_id,
+  )
   nodes = session.exec(select(Node).where(Node.project_id == project.id)).all()
   return _project_to_out(project, nodes)
 
@@ -345,6 +368,7 @@ async def get_tips_candidates(
     raise HTTPException(status_code=404, detail="node_not_found")
 
   ai = AIClient()
+  skill_content = get_skill_content(getattr(project, "skill_id", None))
 
   # 对于 Tips 节点：基于父节点 + 父节点最新回答生成补充 Tips
   if getattr(node, "node_type", "question") == "tip":
@@ -355,14 +379,18 @@ async def get_tips_candidates(
       select(NodeAnswer).where(NodeAnswer.node_id == parent.id).order_by(NodeAnswer.created_at.desc())
     ).first()
     latest_answer_text = latest_answer.content if latest_answer else ""
-    cands = await ai.make_tips_candidates(project.idea_text, parent.question, latest_answer_text)
+    cands = await ai.make_tips_candidates(
+      project.idea_text, parent.question, latest_answer_text, skill_content=skill_content
+    )
   else:
     # 对于普通问题节点：基于问题本身 +（可选）已有回答，生成「可能的回答」候选
     latest_answer = session.exec(
       select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
     ).first()
     latest_answer_text = latest_answer.content if latest_answer else ""
-    cands = await ai.make_tips_candidates(project.idea_text, node.question, latest_answer_text)
+    cands = await ai.make_tips_candidates(
+      project.idea_text, node.question, latest_answer_text, skill_content=skill_content
+    )
   return TipsCandidatesResponse(candidates=cands)
 
 
@@ -477,7 +505,10 @@ async def merge_project(project_id: str, session: Session = Depends(get_session)
     sections.append("")
 
   ai_client = AIClient()
-  content = await ai_client.merge_project_doc(project.name, project.idea_text, sections)
+  skill_content = get_skill_content(getattr(project, "skill_id", None))
+  content = await ai_client.merge_project_doc(
+    project.name, project.idea_text, sections, skill_content=skill_content
+  )
   return MergeResponse(content=content)
 
 

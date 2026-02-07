@@ -20,6 +20,8 @@ const state = {
   tipsCandidates: {}, // nodeId -> string[] Tips 候选
   tipsLoading: {}, // nodeId -> true 表示正在加载 Tips 候选
   contextMenu: { visible: false, nodeId: null },
+  skills: [], // Agent Skills 列表 { id, name }
+  skillId: null, // 当前选中的技能 id，用于优化回答质量
 };
 
 // DOM
@@ -54,6 +56,7 @@ const questionFloatCard = document.getElementById("question-float-card");
 const toastEl = document.getElementById("toast");
 const toastIcon = document.getElementById("toast-icon");
 const toastText = document.getElementById("toast-text");
+const skillSelect = document.getElementById("skill-select");
 
 const resultModal = document.getElementById("result-modal");
 const resultContent = document.getElementById("result-content");
@@ -258,7 +261,10 @@ async function startAction(overriddenContent, fileDisplayName) {
     addMsg("system", "正在分析你的项目…");
     const res = await apiJson(`/api/draft/${state.draftId}/message`, {
       method: "POST",
-      body: JSON.stringify({ content: val }),
+      body: JSON.stringify({
+        content: val,
+        skill_id: state.skillId || undefined,
+      }),
     });
 
     // 替换“正在分析”为 AI 真实回复
@@ -270,7 +276,10 @@ async function startAction(overriddenContent, fileDisplayName) {
       addMsg("system", "正在生成工作台…");
       const project = await apiJson("/api/projects/from-draft", {
         method: "POST",
-        body: JSON.stringify({ draft_id: state.draftId }),
+        body: JSON.stringify({
+          draft_id: state.draftId,
+          skill_id: state.skillId || undefined,
+        }),
       });
       state.projectId = project.id;
       state.nodes = project.nodes;
@@ -1270,5 +1279,27 @@ if (dropFileInput) {
   });
 }
 
-// 问题数量与深度由用户在脑图里手动追问/Tips 控制
+// Agent Skills：加载可选技能并绑定选择
+async function loadSkills() {
+  try {
+    const res = await apiJson("/api/skills");
+    const list = res.skills || [];
+    state.skills = list;
+    if (skillSelect) {
+      skillSelect.innerHTML = '<option value="">无（通用）</option>';
+      list.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = s.name || s.id;
+        skillSelect.appendChild(opt);
+      });
+      skillSelect.addEventListener("change", () => {
+        state.skillId = skillSelect.value || null;
+      });
+    }
+  } catch (e) {
+    console.warn("加载 Agent Skills 失败", e);
+  }
+}
+loadSkills();
 

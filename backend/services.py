@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from .ai_client import AIClient
 from .models import Draft, Node, NodeAnswer, Project, ProjectDialog
+from .skills import get_skill_content
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ async def draft_append_message(
   draft_id: str,
   user_content: str,
   ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[str], Optional[List[str]]]:
   """把用户这条消息塞进对话，调 AI 分析；返回要不要继续问、回复文案、标题、初题。"""
   draft = session.get(Draft, draft_id)
@@ -92,8 +94,9 @@ async def draft_append_message(
   ai_client = ai_client or AIClient()
   messages = json.loads(draft.messages) if draft.messages else []
   messages.append({"role": "user", "content": user_content.strip()})
+  skill_content = get_skill_content(skill_id)
 
-  result = await ai_client.draft_analyze_and_reply(messages)
+  result = await ai_client.draft_analyze_and_reply(messages, skill_content=skill_content)
   reply = result.get("reply", "")
   need_more = result.get("need_more", True)
   title = result.get("title")
@@ -115,6 +118,7 @@ async def create_project_from_draft(
   session: Session,
   draft_id: str,
   ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
 ) -> Project:
   """Draft 聊清楚后建项目：根节点 + 用「脑图出题」提示词生成 2～3 个初题。"""
   draft = session.get(Draft, draft_id)
@@ -137,6 +141,7 @@ async def create_project_from_draft(
     mode=draft.mode or "detail",
     max_questions=max_q,
     current_questions=0,
+    skill_id=skill_id,
   )
   session.add(project)
   session.flush()
@@ -147,7 +152,10 @@ async def create_project_from_draft(
 
   # 脑图初题由专用提示词生成（受众、场景、风险等），与立项阶段「只澄清本质」分离
   client = ai_client or AIClient()
-  questions = await client.generate_initial_mindmap_questions(idea_text, draft.project_title)
+  skill_content = get_skill_content(skill_id)
+  questions = await client.generate_initial_mindmap_questions(
+    idea_text, draft.project_title, skill_content=skill_content
+  )
   if not questions:
     fallback = json.loads(draft.initial_questions) if draft.initial_questions else []
     questions = [str(q)[:200] for q in (fallback if isinstance(fallback, list) else [])[:3]]
@@ -198,6 +206,7 @@ async def create_project_from_idea(
   idea_text: str,
   dialog: List[Tuple[str, str]],
   ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
 ) -> Project:
   ai_client = ai_client or AIClient()
 
@@ -206,7 +215,12 @@ async def create_project_from_idea(
   max_len = 24
   name = cleaned[:max_len] + ("..." if len(cleaned) > max_len else "")
 
-  project = Project(id=_uuid(), name=name, idea_text=idea_text)
+  project = Project(
+    id=_uuid(),
+    name=name,
+    idea_text=idea_text,
+    skill_id=skill_id,
+  )
   session.add(project)
   session.flush()
 
@@ -219,8 +233,9 @@ async def create_project_from_idea(
       )
     )
 
+  skill_content = get_skill_content(skill_id)
   try:
-    drafts = await ai_client.generate_mindmap(idea_text)
+    drafts = await ai_client.generate_mindmap(idea_text, skill_content=skill_content)
   except Exception as e:
     logger.warning("AI generate_mindmap failed, using stub: %s", e)
     drafts = ai_client._generate_stub_mindmap(idea_text)
@@ -381,8 +396,13 @@ async def spawn_followup_node(
   if not latest_answer:
     raise ValueError("no_answer")
 
+  skill_content = get_skill_content(getattr(project, "skill_id", None))
   result = await ai_client.node_answer_judge_and_followups(
-    project.idea_text, node.question, latest_answer.content, node.level
+    project.idea_text,
+    node.question,
+    latest_answer.content,
+    node.level,
+    skill_content=skill_content,
   )
   followups = result.get("followup_questions") or []
   if not isinstance(followups, list):

@@ -15,6 +15,7 @@ class DialogMessage(BaseModel):
 class ProjectInitRequest(BaseModel):
   ideaText: str
   dialog: List[DialogMessage]
+  skill_id: Optional[str] = None
 
 
 class NodeOut(SQLModel):
@@ -44,6 +45,7 @@ class ProjectOut(BaseModel):
   updated_at: datetime
   nodes: List[NodeOut]
   progress: ProgressOut
+  skill_id: Optional[str] = None
 
 
 class ProjectListItem(BaseModel):
@@ -103,6 +105,7 @@ class DraftCreateRequest(BaseModel):
 
 class DraftMessageRequest(BaseModel):
   content: str
+  skill_id: Optional[str] = None
 
 
 class DraftMessageResponse(BaseModel):
@@ -114,5 +117,6 @@ class DraftMessageResponse(BaseModel):
 
 class FromDraftRequest(BaseModel):
   draft_id: str
+  skill_id: Optional[str] = None
 
 
