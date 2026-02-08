@@ -22,6 +22,8 @@ const state = {
   contextMenu: { visible: false, nodeId: null },
   skills: [], // Agent Skills 列表 { id, name }
   skillId: null, // 当前选中的技能 id，用于优化回答质量
+  superAgentRunning: false, // 超级 Agent 是否正在运行
+  superAgentAbortRequested: false, // 用户点击「退出」请求中止
 };
 
 // DOM
@@ -30,6 +32,8 @@ const projectTitleDisplay = document.getElementById("project-title-display");
 const progressText = document.getElementById("progress-text");
 const progressFill = document.getElementById("progress-fill");
 const mergeBtn = document.getElementById("merge-btn");
+const superAgentBtn = document.getElementById("super-agent-btn");
+const superAgentBtnText = document.getElementById("super-agent-btn-text");
 
 const heroSection = document.getElementById("hero-section");
 const chatHistory = document.getElementById("chat-history");
@@ -57,6 +61,11 @@ const toastEl = document.getElementById("toast");
 const toastIcon = document.getElementById("toast-icon");
 const toastText = document.getElementById("toast-text");
 const skillSelect = document.getElementById("skill-select");
+const SUPER_AGENT_BURST_IDS = ["super-agent-burst-1", "super-agent-burst-2", "super-agent-burst-3", "super-agent-burst-4"];
+const superAgentCenterOverlay = document.getElementById("super-agent-center-overlay");
+const superAgentProgressText = document.getElementById("super-agent-progress-text");
+const superAgentDetail = document.getElementById("super-agent-detail");
+const superAgentEtaText = document.getElementById("super-agent-eta-text");
 
 const resultModal = document.getElementById("result-modal");
 const resultContent = document.getElementById("result-content");
@@ -86,40 +95,43 @@ function openNodeContextMenu(x, y, nodeId) {
   state.contextMenu.visible = true;
   state.contextMenu.nodeId = nodeId;
 
-  const padding = 8;
+  const padding = 12;
+  const diskRadius = 100;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const rect = contextMenu.getBoundingClientRect();
-  const menuW = rect.width || 200;
-  const menuH = rect.height || 140;
+  const cx = Math.max(diskRadius + padding, Math.min(vw - diskRadius - padding, x));
+  const cy = Math.max(diskRadius + padding, Math.min(vh - diskRadius - padding, y));
 
-  let left = x;
-  let top = y;
-  if (left + menuW + padding > vw) left = vw - menuW - padding;
-  if (top + menuH + padding > vh) top = vh - menuH - padding;
-
-  contextMenu.style.left = `${left}px`;
-  contextMenu.style.top = `${top}px`;
+  contextMenu.style.left = `${cx}px`;
+  contextMenu.style.top = `${cy}px`;
   contextMenu.classList.remove("hidden");
+  contextMenu.classList.add("menu-visible");
 
   const node = state.nodes.find((n) => n.id === nodeId);
-  const btnAnswer = contextMenu.querySelector('[data-action="answer"]');
-  const btnSpawn = contextMenu.querySelector('[data-action="spawn"]');
-  const btnTips = contextMenu.querySelector('[data-action="tips"]');
+  const groupIncrease = contextMenu.querySelector(".entropy-menu-group.increase");
+  const groupDecrease = contextMenu.querySelector(".entropy-menu-group.decrease");
+  const btnSpawn = contextMenu.querySelector('button[data-action="spawn"]');
+  const spawnLabel = btnSpawn ? btnSpawn.querySelector(".submenu-label") : null;
+
   if (node && node.node_type === "section") {
-    if (btnAnswer) btnAnswer.style.display = "none";
-    if (btnTips) btnTips.style.display = "none";
+    if (groupDecrease) groupDecrease.style.display = "none";
+    if (groupIncrease) groupIncrease.style.display = "flex";
+    if (spawnLabel) spawnLabel.textContent = "在本板块下生成新问题";
     if (btnSpawn) {
-      btnSpawn.style.display = "";
-      btnSpawn.textContent = "在本板块下生成新问题";
+      btnSpawn.disabled = false;
+      btnSpawn.classList.remove("opacity-50", "cursor-not-allowed");
     }
   } else {
-    if (btnAnswer) btnAnswer.style.display = "";
-    if (btnTips) btnTips.style.display = "";
+    if (groupDecrease) groupDecrease.style.display = "flex";
+    if (groupIncrease) groupIncrease.style.display = "flex";
+    const canSpawn = node && (node.status === "green" || node.status === "ai");
     if (btnSpawn) {
-      btnSpawn.style.display = "";
-      btnSpawn.textContent = "追问";
+      btnSpawn.disabled = !canSpawn;
+      btnSpawn.classList.toggle("opacity-50", !canSpawn);
+      btnSpawn.classList.toggle("cursor-not-allowed", !canSpawn);
+      btnSpawn.title = canSpawn ? "" : "请先回答该节点后再追问";
     }
+    if (spawnLabel) spawnLabel.textContent = canSpawn ? "追问" : "请先回答后再追问";
   }
 }
 
@@ -128,6 +140,7 @@ function closeNodeContextMenu() {
   state.contextMenu.visible = false;
   state.contextMenu.nodeId = null;
   contextMenu.classList.add("hidden");
+  contextMenu.classList.remove("menu-visible");
 }
 
 function showToast(text, type) {
@@ -366,19 +379,22 @@ async function switchView() {
   });
 }
 
-// 脑图渲染：根在中心，子节点往四个方向发散
+// 脑图渲染：根在中心，子节点按子树权重分配角度，避免重叠
 const LAYOUT = {
   centerX: 2000,
   centerY: 2000,
-  radiusLevel1: 380,
-  radiusStep: 320,
-  // 6 个方向：上、右上、右下、下、左下、左上（度）
+  radiusLevel1: 420,
+  radiusStep: 380,
+  // 6 个方向：上、右上、右下、下、左下、左上（度），子节点多于 6 时均匀分 360°
   directions: [270, 330, 30, 90, 150, 210],
   nodeWidthRoot: 260,
   nodeWidth: 200,
   nodeWidthSection: 220,
   nodeHeight: 80,
-  perpGap: 100,
+  perpGap: 130,
+  // 每层最小扇形角度（度），保证兄弟节点不重叠
+  minFanAnglePerChild: 28,
+  maxFanAngleTotal: 140,
 };
 
 // ————— 连线形态系统（独立于节点临时推断） —————
@@ -433,6 +449,20 @@ function getConnectorStrokeWidth(morphology, isHackathon) {
   return thick ? (isHackathon ? 3.5 : 3) : (isHackathon ? 1.5 : 1.2);
 }
 
+// 计算每个节点的子树权重（1 + 所有子节点权重之和），用于布局时按权重分配角度避免重叠
+function computeSubtreeWeights(nodes, getChildren) {
+  const weightMap = new Map();
+  function weight(n) {
+    if (weightMap.has(n.id)) return weightMap.get(n.id);
+    const children = getChildren(n.id);
+    const w = 1 + children.reduce((sum, c) => sum + weight(c), 0);
+    weightMap.set(n.id, w);
+    return w;
+  }
+  nodes.forEach((n) => weight(n));
+  return weightMap;
+}
+
 function buildMap() {
   canvasInner.innerHTML = "";
   if (!state.nodes.length) return;
@@ -444,10 +474,13 @@ function buildMap() {
   const pos = new Map();
   const getChildren = (pid) =>
     nodes.filter((n) => n.parent_id === pid).sort((a, b) => a.order_index - b.order_index);
+  const weightMap = computeSubtreeWeights(nodes, getChildren);
 
   const toRad = (deg) => (deg * Math.PI) / 180;
   const cx = LAYOUT.centerX;
   const cy = LAYOUT.centerY;
+  const minFan = LAYOUT.minFanAnglePerChild ?? 28;
+  const maxFan = LAYOUT.maxFanAngleTotal ?? 140;
 
   // 根节点放在中心
   pos.set(root.id, { x: cx - LAYOUT.nodeWidthRoot / 2, y: cy - LAYOUT.nodeHeight / 2, level: 0, angle: null, width: LAYOUT.nodeWidthRoot });
@@ -464,8 +497,9 @@ function buildMap() {
 
     if (depth === 0) {
       const dirs = LAYOUT.directions;
+      const n = children.length;
       children.forEach((child, idx) => {
-        const angle = dirs[idx % dirs.length];
+        const angle = n <= 6 ? dirs[idx % dirs.length] : 270 - (360 / n) * idx;
         const rad = toRad(angle);
         const r = LAYOUT.radiusLevel1;
         const childCenterX = cx + r * Math.cos(rad);
@@ -481,23 +515,26 @@ function buildMap() {
         queue.push({ node: child, depth: 1 });
       });
     } else {
-      // 第二层及以下：沿父节点方向继续延伸，多子节点时略垂直于该方向错开
-      const angle = myPos.angle != null ? myPos.angle : 0;
-      const rad = toRad(angle);
+      const parentAngle = myPos.angle != null ? myPos.angle : 0;
       const r = LAYOUT.radiusStep;
-      const perpRad = toRad(angle + 90);
       const n = children.length;
-      children.forEach((child, idx) => {
-        const perpOffset = (idx - (n - 1) / 2) * LAYOUT.perpGap;
-        const childCenterX = myCenterX + r * Math.cos(rad) + perpOffset * Math.cos(perpRad);
-        const childCenterY = myCenterY + r * Math.sin(rad) + perpOffset * Math.sin(perpRad);
-        const w = LAYOUT.nodeWidth;
+      const totalWeight = children.reduce((s, c) => s + (weightMap.get(c.id) || 1), 0);
+      const fanTotal = Math.min(maxFan, Math.max(n * minFan, 40));
+      let accAngle = parentAngle - fanTotal / 2;
+      children.forEach((child) => {
+        const w = weightMap.get(child.id) || 1;
+        const childAngle = accAngle + (fanTotal * w) / totalWeight / 2;
+        accAngle += (fanTotal * w) / totalWeight;
+        const rad = toRad(childAngle);
+        const childCenterX = myCenterX + r * Math.cos(rad);
+        const childCenterY = myCenterY + r * Math.sin(rad);
+        const nodeW = LAYOUT.nodeWidth;
         pos.set(child.id, {
-          x: childCenterX - w / 2,
+          x: childCenterX - nodeW / 2,
           y: childCenterY - LAYOUT.nodeHeight / 2,
           level: node.level + 1,
-          angle,
-          width: w,
+          angle: childAngle,
+          width: nodeW,
         });
         queue.push({ node: child, depth: depth + 1 });
       });
@@ -540,7 +577,8 @@ function buildMap() {
     const root = nodes.find((r) => r.level === 0);
     const isSection = n.node_type === "section" || (n.level === 1 && root && n.parent_id === root.id);
     const title = (n.title || "").trim() || getNodeShortTitle(n);
-    div.className = `node absolute rounded-[28px] font-black text-sm shadow-xl flex items-center justify-center cursor-pointer ${
+    const levelClass = `node-level-${Math.min(3, Math.max(0, n.level || 0))}`;
+    div.className = `node absolute rounded-[28px] font-black text-sm shadow-xl flex items-center justify-center cursor-pointer ${levelClass} ${
       isRoot ? "node-root p-5 gap-2 flex-col" : isSection ? "node-section p-4 gap-2 flex-col" : "p-6 text-center"
     } ${
       isTip ? "node-tip" : (n.status === "red" ? "node-red" : "node-green")
@@ -694,6 +732,425 @@ async function triggerSectionQuestionFromNode(nodeId) {
   }
 }
 
+// 超级 Agent：按 BFS 顺序收集「未回答的红点问题节点」（排除 section/tip）
+function getRedQuestionNodesInBFSOrder(nodes, maxDepth = 4) {
+  const root = nodes.find((n) => n.level === 0);
+  if (!root) return [];
+  const getChildren = (pid) =>
+    nodes.filter((n) => n.parent_id === pid).sort((a, b) => a.order_index - b.order_index);
+  const isQuestion = (n) =>
+    n && n.node_type !== "section" && n.node_type !== "tip" && n.status === "red";
+  const out = [];
+  const queue = [{ node: root, depth: 0 }];
+  while (queue.length) {
+    const { node, depth } = queue.shift();
+    if (depth > 0 && isQuestion(node) && node.level < maxDepth) out.push(node);
+    getChildren(node.id).forEach((c) => queue.push({ node: c, depth: depth + 1 }));
+  }
+  return out;
+}
+
+// 已答问题节点（可从中 spawn 新追问），BFS 顺序，深度限制与红点一致
+function getSpawnableQuestionNodesInBFSOrder(nodes, maxDepth = 4) {
+  const root = nodes.find((n) => n.level === 0);
+  if (!root) return [];
+  const getChildren = (pid) =>
+    nodes.filter((n) => n.parent_id === pid).sort((a, b) => a.order_index - b.order_index);
+  const isSpawnable = (n) =>
+    n && n.node_type !== "section" && n.node_type !== "tip" && (n.status === "green" || n.status === "ai") && n.level < maxDepth;
+  const out = [];
+  const queue = [{ node: root, depth: 0 }];
+  while (queue.length) {
+    const { node, depth } = queue.shift();
+    if (depth > 0 && isSpawnable(node)) out.push(node);
+    getChildren(node.id).forEach((c) => queue.push({ node: c, depth: depth + 1 }));
+  }
+  return out;
+}
+
+// Fisher-Yates 洗牌，打乱顺序
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 智能+随机选择本批要处理的红点：打乱顺序，并带一点「深度 + 兄弟数少优先」权重，避免总是同一侧/同一规律
+function pickRedBatchForExpand(redList, batchSize) {
+  if (redList.length <= batchSize) return shuffleArray(redList);
+  const shuffled = shuffleArray(redList);
+  const getSiblingCount = (n) => redList.filter((x) => x.parent_id === n.parent_id).length;
+  const score = (n) => {
+    const depth = (n.level || 0) * 0.4;
+    const sib = getSiblingCount(n);
+    const spread = 2 / (1 + sib);
+    const rand = Math.random() * 1.5;
+    return depth + spread + rand;
+  };
+  const scored = shuffled.map((n) => ({ n, s: score(n) }));
+  scored.sort((a, b) => b.s - a.s);
+  return scored.slice(0, batchSize).map((x) => x.n);
+}
+
+// 四周爆发弹窗：slot 1=左上(当前问题) 2=右上(选取/选定) 3=右下(选定答案) 4=左下(状态/已应用)
+function showBurst(slot, title, content) {
+  const id = SUPER_AGENT_BURST_IDS[slot - 1];
+  if (!id) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  const titleEl = el.querySelector(".burst-title");
+  const contentEl = el.querySelector(".burst-content");
+  if (titleEl) titleEl.textContent = title;
+  if (contentEl) {
+    const raw = (content || "").slice(0, 720);
+    contentEl.textContent = raw + ((content || "").length > 720 ? "…" : "");
+  }
+  el.classList.remove("opacity-0", "pointer-events-none");
+  el.classList.add("burst-visible");
+}
+
+function updateBurst(slot, title, content) {
+  showBurst(slot, title, content);
+}
+
+function hideAllBursts() {
+  SUPER_AGENT_BURST_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.remove("burst-visible");
+      el.classList.add("opacity-0", "pointer-events-none");
+    }
+  });
+}
+
+// 中央半透明托管状态：进度、细节行、预计完成时间
+function showCenterOverlay(progressPercent, etaStr, detailStr) {
+  if (!superAgentCenterOverlay) return;
+  if (superAgentProgressText) superAgentProgressText.textContent = `目前进度 ${Math.round(progressPercent)}%`;
+  if (superAgentDetail) superAgentDetail.textContent = detailStr || "";
+  if (superAgentEtaText) superAgentEtaText.textContent = etaStr || "预计约 — 后完成收敛";
+  superAgentCenterOverlay.classList.remove("opacity-0");
+  superAgentCenterOverlay.classList.add("opacity-100");
+}
+
+function updateCenterOverlay(progressPercent, etaStr, detailStr) {
+  if (!superAgentCenterOverlay || superAgentCenterOverlay.classList.contains("opacity-0")) return;
+  if (superAgentProgressText) superAgentProgressText.textContent = `目前进度 ${Math.round(progressPercent)}%`;
+  if (superAgentDetail && detailStr !== undefined) superAgentDetail.textContent = detailStr || "";
+  if (superAgentEtaText && etaStr != null) superAgentEtaText.textContent = etaStr;
+}
+
+function hideCenterOverlay() {
+  if (!superAgentCenterOverlay) return;
+  superAgentCenterOverlay.classList.add("opacity-0");
+  superAgentCenterOverlay.classList.remove("opacity-100");
+}
+
+function showSuperAgentExtra() {
+  const el = document.getElementById("super-agent-extra");
+  if (el) {
+    el.classList.remove("opacity-0");
+    el.setAttribute("aria-hidden", "false");
+  }
+}
+
+function hideSuperAgentExtra() {
+  const el = document.getElementById("super-agent-extra");
+  if (el) {
+    el.classList.add("opacity-0");
+    el.setAttribute("aria-hidden", "true");
+  }
+}
+
+const SUPER_AGENT_MAX_ROUNDS = 10;  // 最多 10 轮
+const SUPER_AGENT_BATCH_SIZE = 2;   // 每轮更新 2 个节点（减轻单点 429）
+const SUPER_AGENT_MAX_DEPTH = 4;
+const SUPER_AGENT_READ_MS = 400;    // 爆发弹窗短暂停留
+
+// 单节点：仅用 AI 输出（建议回答或 Tips），无则跳过该节点，不提交非 AI 文案
+async function processOneRedNode(node) {
+  const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
+  let answerContent = "";
+  try {
+    const suggestRes = await apiJson(`${base}/answer/suggest`, { method: "POST" });
+    answerContent = (suggestRes.content && String(suggestRes.content).trim()) || "";
+  } catch (_) {}
+  if (!answerContent) {
+    try {
+      const candRes = await apiJson(`${base}/tips/candidates`, { method: "POST" });
+      const cands = candRes.candidates || [];
+      answerContent = (cands[0] && String(cands[0]).trim()) || "";
+    } catch (_) {}
+  }
+  if (!answerContent) {
+    throw new Error("no_ai_answer");
+  }
+  await apiJson(`${base}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ content: answerContent, by_ai: true }),
+  });
+  const newNode = await apiJson(`${base}/spawn`, { method: "POST" });
+  return { node, newNode, ok: true };
+}
+
+// 仅从已答节点生成追问（100% 时用，不提交回答；与常规一致，仅用模型返回的专业追问）
+async function spawnFromAnsweredNode(node) {
+  const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
+  await apiJson(`${base}/spawn`, { method: "POST" });
+  return { node, ok: true };
+}
+
+// 收敛阶段：仅用 AI 输出，无则跳过该节点
+async function processOneRedNodeConverge(node) {
+  const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
+  let answerContent = "";
+  try {
+    const suggestRes = await apiJson(`${base}/answer/suggest`, { method: "POST" });
+    answerContent = (suggestRes.content && String(suggestRes.content).trim()) || "";
+  } catch (_) {}
+  if (!answerContent) {
+    try {
+      const candRes = await apiJson(`${base}/tips/candidates`, { method: "POST" });
+      const cands = candRes.candidates || [];
+      answerContent = (cands[0] && String(cands[0]).trim()) || "";
+    } catch (_) {}
+  }
+  if (!answerContent) {
+    throw new Error("no_ai_answer");
+  }
+  await apiJson(`${base}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ content: answerContent, by_ai: true }),
+  });
+  return { node, ok: true };
+}
+
+async function runSuperAgent() {
+  if (!state.projectId || state.superAgentRunning) return;
+  state.superAgentRunning = true;
+  if (superAgentBtn) {
+    superAgentBtn.disabled = true;
+    if (superAgentBtnText) superAgentBtnText.textContent = "爆发中…";
+  }
+  let totalExpanded = 0;
+  let roundStartMs = 0;
+  let consecutive100Rounds = 0;   // 用尽 15 次机会后，连续几轮 100% 无新追问则自动退
+  const ROOTWARD_QUOTA = 15;      // 从根节点找问题的提问机会，用尽后才开始计连续 3 轮退出
+  let rootwardQuotaRemaining = ROOTWARD_QUOTA;
+  state.superAgentAbortRequested = false;
+  showSuperAgentExtra();
+  try {
+    showCenterOverlay(0, "预计约 1–2 分钟后完成收敛", "阶段：展开（回答 + 追问），随后自动收敛至 100%");
+    for (let round = 0; round < SUPER_AGENT_MAX_ROUNDS; round++) {
+      if (state.superAgentAbortRequested) {
+        showToast("已退出托管", "blue");
+        break;
+      }
+      roundStartMs = roundStartMs || Date.now();
+      const redList = getRedQuestionNodesInBFSOrder(state.nodes, SUPER_AGENT_MAX_DEPTH);
+      // 无红点时：先消耗「从根节点找问题」的 15 次机会，用尽后再计连续 3 轮退出
+      if (redList.length === 0) {
+        if (rootwardQuotaRemaining <= 0) {
+          consecutive100Rounds += 1;
+          if (consecutive100Rounds >= 3) {
+            updateCenterOverlay(100, "已相当完善，自动进入收敛", "15 次从根找问题已用尽且连续 3 轮无新追问，结束展开");
+            showToast("已连续 3 轮处于 100% 无新追问，视为相当完善，自动进入收敛", "green");
+            hideAllBursts();
+            await new Promise((r) => setTimeout(r, 600));
+            break;
+          }
+        }
+        // 从根节点往外（BFS 序）选已答节点，本批最多用掉剩余配额
+        const spawnableList = getSpawnableQuestionNodesInBFSOrder(state.nodes, SUPER_AGENT_MAX_DEPTH);
+        const batchSize = Math.min(SUPER_AGENT_BATCH_SIZE, Math.max(0, rootwardQuotaRemaining));
+        const spawnBatch = spawnableList.length > 0 && batchSize > 0
+          ? spawnableList.slice(0, batchSize)
+          : [];
+        if (spawnBatch.length > 0) {
+          rootwardQuotaRemaining -= spawnBatch.length;
+          updateCenterOverlay(
+            ((round + 0.5) / SUPER_AGENT_MAX_ROUNDS) * 100,
+            "从根节点找问题",
+            `第 ${round + 1}/${SUPER_AGENT_MAX_ROUNDS} 轮 · 本批 ${spawnBatch.length} 次尝试（剩余从根提问机会 ${rootwardQuotaRemaining}/${ROOTWARD_QUOTA}）`,
+          );
+          showBurst(1, "追加追问", "当前已 100%，从根节点往外尝试生成追问以多创造分支\n仅当模型返回专业追问时新增");
+          const spawnResults = await Promise.allSettled(spawnBatch.map((n) => spawnFromAnsweredNode(n)));
+          const spawnOk = spawnResults.filter((r) => r.status === "fulfilled" && r.value && r.value.ok).length;
+          totalExpanded += spawnOk;
+          if (spawnOk > 0) consecutive100Rounds = 0;
+          const project = await apiJson(`/api/projects/${state.projectId}`);
+          state.nodes = project.nodes || state.nodes;
+          if (project.progress) updateProgress(project.progress);
+          buildMap();
+          updateCenterOverlay(
+            ((round + 1) / SUPER_AGENT_MAX_ROUNDS) * 100,
+            spawnOk > 0 ? "已新增追问，继续展开" : "本轮无新追问，继续",
+            `第 ${round + 1}/${SUPER_AGENT_MAX_ROUNDS} 轮 · 从已答节点新增 ${spawnOk}/${spawnBatch.length}（剩余机会 ${rootwardQuotaRemaining}）`,
+          );
+        } else {
+          if (rootwardQuotaRemaining <= 0) {
+            updateCenterOverlay(
+              ((round + 1) / SUPER_AGENT_MAX_ROUNDS) * 100,
+              "即将进入收敛",
+              `第 ${round + 1}/${SUPER_AGENT_MAX_ROUNDS} 轮 · 15 次机会已用尽（${consecutive100Rounds}/3 轮无新追问将退出）`,
+            );
+          } else {
+            updateCenterOverlay(
+              ((round + 1) / SUPER_AGENT_MAX_ROUNDS) * 100,
+              "即将进入收敛",
+              `第 ${round + 1}/${SUPER_AGENT_MAX_ROUNDS} 轮 · 暂无可追问节点（剩余从根机会 ${rootwardQuotaRemaining}）`,
+            );
+          }
+        }
+        hideAllBursts();
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      consecutive100Rounds = 0;
+      const progressPercent = ((round + 0.5) / SUPER_AGENT_MAX_ROUNDS) * 100;
+      const remainingRounds = SUPER_AGENT_MAX_ROUNDS - round - 1;
+      let etaStr = "预计约 — 后完成收敛";
+      if (round > 0 && roundStartMs) {
+        const elapsed = (Date.now() - roundStartMs) / 1000;
+        const avgPerRound = elapsed / round;
+        const secLeft = Math.max(0, Math.round(remainingRounds * avgPerRound));
+        etaStr = secLeft > 0 ? `预计约 ${secLeft} 秒后完成收敛` : "即将完成收敛";
+      }
+      const batch = pickRedBatchForExpand(redList, SUPER_AGENT_BATCH_SIZE);
+      updateCenterOverlay(progressPercent, etaStr, `第 ${round + 1} / ${SUPER_AGENT_MAX_ROUNDS} 轮 · 本批 ${batch.length} 个节点（智能打乱顺序）`);
+      hideAllBursts();
+
+      const batchDetailLines = batch.map((n, i) => {
+        const q = (n.question || "").trim();
+        return `${i + 1}. ${q.slice(0, 52)}${q.length > 52 ? "…" : ""}`;
+      });
+      const batchDetail = `本批共 ${batch.length} 个节点，同时执行：\n\n${batchDetailLines.join("\n")}`;
+      const stepDetail = "每节点流程：\n· 拉取参考答案候选\n· 取首条提交为 AI 回答\n· 在该节点下生成追问子节点";
+      const roundDetail = `第 ${round + 1} / ${SUPER_AGENT_MAX_ROUNDS} 轮展开\n本批处理 ${batch.length} 个红点\n累计已新增 ${totalExpanded} 个节点`;
+
+      showBurst(1, "并发展开", batchDetail);
+      showBurst(2, "本批问题", batchDetailLines.join("\n"));
+      showBurst(3, "处理流程", stepDetail);
+      showBurst(4, "本轮进度", roundDetail);
+      await new Promise((r) => setTimeout(r, SUPER_AGENT_READ_MS));
+
+      const results = await Promise.allSettled(
+        batch.map((node) => processOneRedNode(node)),
+      );
+      const ok = results.filter((r) => r.status === "fulfilled" && r.value && r.value.ok).length;
+      totalExpanded += ok;
+      const noAi = results.filter((r) => r.status === "rejected" && r.reason && (r.reason.message || "").includes("no_ai_answer")).length;
+      if (noAi > 0) {
+        showToast(`本批 ${noAi} 个节点未获取到 AI 回答（建议回答与 Tips 均为空）已跳过，请检查是否已配置 API 或网络`, "blue");
+      }
+      if (results.some((r) => r.status === "rejected" && (!r.reason || !(r.reason.message || "").includes("no_ai_answer")))) {
+        console.warn("super agent batch partial fail:", results.map((r) => (r.status === "rejected" ? r.reason : null)));
+      }
+
+      const project = await apiJson(`/api/projects/${state.projectId}`);
+      state.nodes = project.nodes || state.nodes;
+      if (project.progress) updateProgress(project.progress);
+      buildMap();
+
+      const progressDone = ((round + 1) / SUPER_AGENT_MAX_ROUNDS) * 100;
+      const remainingRoundsAfter = SUPER_AGENT_MAX_ROUNDS - round - 2;
+      let etaStrAfter = "即将完成收敛";
+      if (roundStartMs && round >= 0) {
+        const elapsed = (Date.now() - roundStartMs) / 1000;
+        const avgPerRound = elapsed / (round + 1);
+        const secLeft = Math.max(0, Math.round(remainingRoundsAfter * avgPerRound));
+        etaStrAfter = secLeft > 0 ? `预计约 ${secLeft} 秒后完成收敛` : "即将完成收敛";
+      }
+      updateCenterOverlay(progressDone, etaStrAfter, `本批完成：${ok}/${batch.length} 个 · 累计新节点 ${totalExpanded}`);
+
+      const failCount = batch.length - ok;
+      updateBurst(1, "本轮完成", `成功 ${ok} 个，${failCount ? `失败 ${failCount} 个` : "全部成功"}\n\n新生成的追问子节点已挂载到对应父节点下，可在导图中查看。`);
+      updateBurst(3, "已应用", `已写入 AI 回答并生成追问子节点\n本批 ${ok} 个节点已完成上述流程`);
+      updateBurst(4, "本轮进度", `第 ${round + 1} / ${SUPER_AGENT_MAX_ROUNDS} 轮完成\n累计已展开 ${totalExpanded} 个新节点`);
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    hideAllBursts();
+
+    // 收敛阶段：剩余红点全部答完，完成度冲到 100%
+    let project = await apiJson(`/api/projects/${state.projectId}`);
+    state.nodes = project.nodes || state.nodes;
+    const phaseTitleEl = document.getElementById("super-agent-phase-title");
+    if (phaseTitleEl) phaseTitleEl.textContent = "AI 托管收敛中";
+    let convergeRounds = 0;
+    const MAX_CONVERGE_ROUNDS = 20;
+    while (convergeRounds < MAX_CONVERGE_ROUNDS) {
+      if (state.superAgentAbortRequested) {
+        showToast("已退出托管", "blue");
+        break;
+      }
+      const redAll = getRedQuestionNodesInBFSOrder(state.nodes, 99);
+      if (redAll.length === 0) {
+        updateCenterOverlay(100, "已完成收敛，完成度 100%", "所有问题节点已作答，可点击「融合项目成果」生成报告");
+        await new Promise((r) => setTimeout(r, 800));
+        break;
+      }
+      const pct = project.progress ? project.progress.percent : 0;
+      const batch = shuffleArray(redAll).slice(0, SUPER_AGENT_BATCH_SIZE);
+      const roundsLeft = Math.ceil(redAll.length / SUPER_AGENT_BATCH_SIZE);
+      updateCenterOverlay(
+        pct,
+        `剩余 ${redAll.length} 个待答，约 ${roundsLeft} 轮内达到 100%`,
+        `收敛第 ${convergeRounds + 1} 批 · 本批回答 ${batch.length} 个节点（只答不追问）`,
+      );
+      showBurst(1, "收敛本批", batch.map((n, i) => `${i + 1}. ${((n.question || "").trim().slice(0, 50))}${(n.question || "").trim().length > 50 ? "…" : ""}`).join("\n"));
+      showBurst(2, "处理方式", "仅提交 AI 回答，不再生成追问\n完成度将逐步升至 100%");
+      showBurst(3, "状态", `本批 ${batch.length} 个节点并发回答中…`);
+      showBurst(4, "进度", `完成度 ${pct}% · 剩余 ${redAll.length} 个`);
+      const convergeResults = await Promise.allSettled(batch.map((node) => processOneRedNodeConverge(node)));
+      const convergeNoAi = convergeResults.filter((r) => r.status === "rejected" && r.reason && (r.reason.message || "").includes("no_ai_answer")).length;
+      if (convergeNoAi > 0) {
+        showToast(`收敛阶段 ${convergeNoAi} 个节点未获取到 AI 回答已跳过`, "blue");
+      }
+      project = await apiJson(`/api/projects/${state.projectId}`);
+      state.nodes = project.nodes || state.nodes;
+      if (project.progress) {
+        updateProgress(project.progress);
+        const newPct = project.progress.percent;
+        updateCenterOverlay(newPct, newPct >= 100 ? "已完成收敛，完成度 100%" : `完成度 ${newPct}% · 剩余 ${getRedQuestionNodesInBFSOrder(state.nodes, 99).length} 个`);
+        updateBurst(1, "本批完成", `已回答 ${batch.length} 个节点`);
+        updateBurst(3, "状态", "已写入回答，完成度已更新");
+        updateBurst(4, "进度", `完成度 ${newPct}%`);
+      }
+      buildMap();
+      convergeRounds += 1;
+    }
+
+    hideCenterOverlay();
+    const projectFinal = await apiJson(`/api/projects/${state.projectId}`);
+    state.nodes = projectFinal.nodes || state.nodes;
+    if (projectFinal.progress) updateProgress(projectFinal.progress);
+    buildMap();
+    if (totalExpanded > 0 || (projectFinal.progress && projectFinal.progress.percent >= 100)) {
+      showToast(projectFinal.progress && projectFinal.progress.percent >= 100 ? "展开与收敛已完成，完成度 100%" : `爆发完成，共展开 ${totalExpanded} 个分支`, "green");
+    }
+  } catch (e) {
+    console.error(e);
+    hideAllBursts();
+    hideCenterOverlay();
+    showToast("超级 Agent 执行出错：" + (e.message || "请稍后重试"), "red");
+  } finally {
+    hideAllBursts();
+    hideCenterOverlay();
+    hideSuperAgentExtra();
+    state.superAgentAbortRequested = false;
+    const phaseTitleEl = document.getElementById("super-agent-phase-title");
+    if (phaseTitleEl) phaseTitleEl.textContent = "AI 托管发散中";
+    state.superAgentRunning = false;
+    if (superAgentBtn) {
+      superAgentBtn.disabled = false;
+      if (superAgentBtnText) superAgentBtnText.textContent = "超级 Agent";
+    }
+  }
+}
+
 // 基于已回答节点生成新问题：长按并拖动该节点触发
 async function triggerSpawnFromNode(nodeId) {
   if (!state.projectId) return;
@@ -724,6 +1181,7 @@ async function triggerSpawnFromNode(nodeId) {
     console.error(e);
     let msg = e && e.message ? e.message : "生成新问题失败";
     if (msg.includes("no_answer")) msg = "请先回答该节点后再点击加号生成新问题";
+    if (msg.includes("no_followup")) msg = "当前节点暂无合适追问（质量优先），可稍后重试或手动输入问题";
     showToast(msg, "red");
   }
 }
@@ -751,8 +1209,8 @@ async function triggerTipsFromNode(nodeId) {
     const added = state.nodes.find((n) => n.id === newNode.id);
     if (added) {
       ensureNodeTitle(added);
-      // 新建 Tips 后，自动选中该 Tips 节点，并在问题框中直接展示可选内容
-      setTimeout(() => selectNode(added.id), 0);
+      // 新建 Tips 后自动选中该节点，不移动画布聚焦
+      setTimeout(() => selectNode(added.id, { panToCenter: false }), 0);
     }
     showToast("已为该节点生成一个 Tips 信息节点", "blue");
   } catch (e) {
@@ -862,8 +1320,8 @@ async function chooseTip(nodeId, content) {
     const updated = state.nodes.find((n) => n.id === nodeId);
     if (updated) {
       ensureNodeTitle(updated);
-      // 重新选中，刷新问题详情框为最终内容
-      setTimeout(() => selectNode(updated.id), 0);
+      // 重新选中以刷新问题详情框，不移动画布
+      setTimeout(() => selectNode(updated.id, { panToCenter: false }), 0);
     }
     showToast("已应用选中的 Tips", "blue");
   } catch (e) {
@@ -1031,7 +1489,7 @@ async function applyTipAsAnswer(nodeId, content) {
     }
 
     buildMap();
-    setTimeout(() => selectNode(nodeId), 0);
+    setTimeout(() => selectNode(nodeId, { panToCenter: false }), 0);
     showToast("已将 AI 提示作为回答应用到该问题", "blue");
   } catch (e) {
     console.error(e);
@@ -1067,6 +1525,8 @@ function handleContextMenuClick(action) {
   } else if (action === "spawn") {
     if (node.node_type === "section") {
       triggerSectionQuestionFromNode(nodeId);
+    } else if (node.status !== "green" && node.status !== "ai") {
+      showToast("请先回答该节点后再追问。", "blue");
     } else {
       triggerSpawnFromNode(nodeId);
     }
@@ -1145,7 +1605,7 @@ async function ensureNodeTitle(node) {
 }
 
 function selectNode(id, options = {}) {
-  const { panToCenter = true } = options;
+  const { panToCenter = true, ensureTitle = true } = options;
   const node = state.nodes.find((n) => n.id === id);
   if (!node) return;
   state.activeId = id;
@@ -1169,7 +1629,7 @@ function selectNode(id, options = {}) {
 
     if (node.node_type === "section") {
       questionFloatText.className = "text-white/80 font-medium text-sm leading-relaxed";
-      questionFloatText.textContent = `本板块：${title}。请选择下方具体问题作答。`;
+      questionFloatText.textContent = `本板块：${node.title || "本板块"}。请选择下方具体问题作答。`;
       if (nodePanel) {
         nodePanel.classList.add("translate-y-32", "opacity-0", "pointer-events-none");
         nodePanel.classList.remove("pointer-events-auto");
@@ -1199,8 +1659,8 @@ function selectNode(id, options = {}) {
     syncCanvas();
   }
 
-  // 问题节点：选中时触发 AI 起短标题；Tips 节点：仅在生成时已触发
-  if (!isTip) {
+  // 问题节点：选中时触发 AI 起短标题；超级 Agent 运行中不请求起名，保证发散节奏
+  if (!isTip && ensureTitle && !state.superAgentRunning) {
     ensureNodeTitle(node);
   }
 }
@@ -1378,7 +1838,7 @@ async function submitAnswer() {
 
     if (res.nextNodeId) {
       const next = state.nodes.find((n) => n.id === res.nextNodeId);
-      if (next) setTimeout(() => selectNode(next.id), 600);
+      if (next) setTimeout(() => selectNode(next.id, { panToCenter: false }), 600);
     }
   } catch (e) {
     console.error(e);
@@ -1414,27 +1874,113 @@ function enterViewModeForNode(node) {
 }
 
 // ----------- Merge 融合 -----------
+// 保存最近一次融合结果，供 PDF 导出与可靠性说明
+state.lastMergeContent = null;
+state.lastMergeTitle = null;
+
+const resultMergeLoadingHtml = `
+  <div class="flex flex-col items-center justify-center min-h-[200px] gap-6 text-gray-500">
+    <div class="w-14 h-14 border-4 border-[#4285F4]/30 border-t-[#4285F4] rounded-full animate-spin"></div>
+    <p class="font-bold text-lg">正在生成报告…</p>
+    <p class="text-sm">以当前脑图全部问答为依据，请稍候</p>
+  </div>`;
 
 async function openModal() {
   if (!state.projectId) return;
+  resultModal.classList.remove("hidden");
+  resultContent.innerHTML = resultMergeLoadingHtml;
+  if (mergeBtn) mergeBtn.disabled = true;
   try {
     const res = await apiJson(`/api/projects/${state.projectId}/merge`, {
       method: "POST",
     });
-    resultModal.classList.remove("hidden");
-    resultContent.innerHTML = `<pre class="whitespace-pre-wrap text-gray-800 text-lg leading-relaxed">${res.content.replace(
+    state.lastMergeContent = res.content || "";
+    state.lastMergeTitle = state.title || "项目全景方案";
+    resultContent.innerHTML = `<pre class="whitespace-pre-wrap text-gray-800 text-lg leading-relaxed">${(res.content || "").replace(
       /</g,
       "&lt;"
     )}</pre>`;
   } catch (e) {
     console.error(e);
+    resultContent.innerHTML = `<p class="text-red-500 font-semibold text-center py-8">生成失败，请稍后重试。</p>`;
     showToast("项目尚未全部补全，无法融合。", "red");
+  } finally {
+    if (mergeBtn) mergeBtn.disabled = false;
   }
 }
 
 window.closeModal = function () {
   resultModal.classList.add("hidden");
 };
+
+// 导出 PDF：打开打印友好页，用户通过浏览器「另存为 PDF」保存
+function exportMergeToPdf() {
+  const content = state.lastMergeContent;
+  const title = state.lastMergeTitle || "项目全景方案";
+  if (!content || !content.trim()) {
+    showToast("请先点击「融合项目成果」生成报告后再导出 PDF", "red");
+    return;
+  }
+  const pdfBtn = document.getElementById("download-pdf-btn");
+  const originalHtml = pdfBtn ? pdfBtn.innerHTML : "";
+  if (pdfBtn) {
+    pdfBtn.disabled = true;
+    pdfBtn.innerHTML = '<span class="inline-block w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2 align-middle"></span>生成中…';
+  }
+  const restorePdfBtn = () => {
+    if (pdfBtn) {
+      pdfBtn.disabled = false;
+      pdfBtn.innerHTML = originalHtml || "下载 PDF 报告";
+    }
+  };
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>${(title || "项目全景方案").replace(/</g, "&lt;")} - PDF 报告</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
+  <style>
+    body { font-family: 'Segoe UI', 'PingFang SC', sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1.5rem; color: #1e293b; line-height: 1.7; }
+    h1 { font-size: 1.75rem; border-bottom: 2px solid #4285F4; padding-bottom: 0.5rem; }
+    h2 { font-size: 1.35rem; margin-top: 1.5rem; }
+    h3 { font-size: 1.1rem; margin-top: 1rem; }
+    pre { white-space: pre-wrap; background: #f1f5f9; padding: 1rem; border-radius: 8px; }
+    @media print { body { margin: 0; padding: 1rem; } }
+  </style>
+</head>
+<body>
+  <div id="report"></div>
+  <script>
+    var raw = ${JSON.stringify(content)};
+    function render() {
+      var el = document.getElementById('report');
+      if (!el) return;
+      if (typeof marked !== 'undefined') {
+        el.innerHTML = marked.parse(raw || '');
+      } else {
+        el.innerHTML = '<pre>' + (raw || '').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '<\/pre>';
+      }
+      setTimeout(function() { window.print(); }, 400);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() { setTimeout(render, 100); });
+    } else {
+      setTimeout(render, 100);
+    }
+  <\/script>
+</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "noopener,noreferrer");
+  if (w) w.focus();
+  else {
+    showToast("请允许弹窗后重试，或使用融合弹窗内打印 (Ctrl+P) 另存为 PDF", "blue");
+    restorePdfBtn();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setTimeout(restorePdfBtn, 2500);
+}
 
 // 事件绑定
 
@@ -1455,6 +2001,14 @@ nodeInput.addEventListener("keypress", (e) => {
 });
 
 mergeBtn.addEventListener("click", openModal);
+const downloadPdfBtn = document.getElementById("download-pdf-btn");
+if (downloadPdfBtn) downloadPdfBtn.addEventListener("click", exportMergeToPdf);
+if (superAgentBtn) superAgentBtn.addEventListener("click", runSuperAgent);
+const superAgentExitBtn = document.getElementById("super-agent-exit-btn");
+if (superAgentExitBtn) superAgentExitBtn.addEventListener("click", () => {
+  state.superAgentAbortRequested = true;
+  showToast("正在退出托管…", "blue");
+});
 
 // 文档拖拽上传
 

@@ -444,10 +444,7 @@ async def spawn_followup_node(
   ai_client: Optional[AIClient] = None,
 ) -> Node:
   """
-  基于“已回答过的节点”，向外拖拽时生成一个新的追问子节点：
-  - 取该节点最新一次回答；
-  - 调用 node_answer_judge_and_followups，只使用 followup_questions；
-  - 取第一个追问生成子节点。
+  基于“已回答过的节点”生成追问子节点。始终仅用模型返回的专业追问，无兜底（含 100% 后追加）。
   """
   ai_client = ai_client or AIClient()
 
@@ -456,7 +453,6 @@ async def spawn_followup_node(
   if not node or node.project_id != project.id:
     raise ValueError("node_not_found")
 
-  # 需要至少有一条回答
   latest_answer = session.exec(
     select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
   ).first()
@@ -477,7 +473,7 @@ async def spawn_followup_node(
     followups = []
   followups = [str(q)[:200] for q in followups if str(q).strip()]
   if not followups:
-    followups = ["能再具体说明或补充一下吗？"]
+    raise ValueError("no_followup")
 
   q = followups[0]
 

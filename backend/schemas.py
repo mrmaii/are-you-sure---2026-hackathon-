@@ -89,6 +89,11 @@ class TipsCandidatesResponse(BaseModel):
   candidates: List[str]
 
 
+class AnswerSuggestResponse(BaseModel):
+  """自动模式用：针对节点问题生成的直接回答（追问+回答为主，非 Tips）"""
+  content: str
+
+
 class TipsChooseRequest(BaseModel):
   content: str
 

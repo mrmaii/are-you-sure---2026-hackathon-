@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MindBridge AI - Google Premium Edition</title>
+    <title>熵导图 · 控制信息的熵增与熵减</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -83,6 +83,16 @@
         #toast:not(.toast-retracted) {
             visibility: visible;
         }
+        /* 四周爆发弹窗：出现时滑入、消失时滑出 */
+        .super-agent-burst.burst-visible {
+            opacity: 1;
+            transform: translate(0);
+            pointer-events: none;
+        }
+        #super-agent-burst-1.burst-visible { transform: translate(0); }
+        #super-agent-burst-2.burst-visible { transform: translate(0); }
+        #super-agent-burst-3.burst-visible { transform: translate(0); }
+        #super-agent-burst-4.burst-visible { transform: translate(0); }
 
         /* 节点样式 */
         .node {
@@ -111,6 +121,15 @@
             box-shadow: 0 4px 14px rgba(52, 168, 83, 0.25);
         }
 
+        /* 按层级颜色区分：0 根 1 一级 2 二级 3 三级 */
+        .node-level-0 { border-left: 5px solid #4285F4; }
+        .node-level-1 { border-left: 5px solid #4285F4; }
+        .node-level-2 { border-left: 5px solid #34A853; }
+        .node-level-3 { border-left: 5px solid #FBBC05; }
+        .node-tip.node-level-1 { border-left-color: #1E88E5; }
+        .node-tip.node-level-2 { border-left-color: #0D9488; }
+        .node-tip.node-level-3 { border-left-color: #D97706; }
+
         .node-tip {
             background: #E3F2FD;
             color: #1E88E5;
@@ -137,10 +156,131 @@
             height: 3px !important;
         }
 
-        /* 右键菜单样式 */
+        /* 熵导图 · 右键圆盘菜单（围绕光标） */
         #node-context-menu {
-            min-width: 160px;
+            position: fixed;
+            z-index: 120;
+            width: 1px; height: 1px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
         }
+        #node-context-menu.menu-visible { pointer-events: auto; }
+        #node-context-menu .entropy-menu-disk {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255,255,255,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #node-context-menu .entropy-menu-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+        }
+        #node-context-menu .entropy-menu-group .group-trigger {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 10px 14px;
+            border-radius: 18px;
+            border: none;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.2s ease;
+            background: transparent;
+            color: inherit;
+            min-width: 72px;
+        }
+        #node-context-menu .entropy-menu-group.increase .group-trigger {
+            color: #c2410c;
+            background: rgba(234, 88, 12, 0.12);
+        }
+        #node-context-menu .entropy-menu-group.increase .group-trigger:hover {
+            background: rgba(234, 88, 12, 0.22);
+            box-shadow: 0 4px 12px rgba(234, 88, 12, 0.2);
+        }
+        #node-context-menu .entropy-menu-group.decrease .group-trigger {
+            color: #0d9488;
+            background: rgba(13, 148, 136, 0.12);
+        }
+        #node-context-menu .entropy-menu-group.decrease .group-trigger:hover {
+            background: rgba(13, 148, 136, 0.22);
+            box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+        }
+        #node-context-menu .group-icon {
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #node-context-menu .group-icon svg { width: 28px; height: 28px; }
+        #node-context-menu .entropy-submenu {
+            position: absolute;
+            top: 100%;
+            margin-top: 6px;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-4px);
+            transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+            z-index: 10;
+            min-width: 120px;
+            padding: 6px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+            border: 1px solid rgba(0,0,0,0.06);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        #node-context-menu .entropy-menu-group.increase .entropy-submenu { left: 50%; transform: translate(-50%, -4px); }
+        #node-context-menu .entropy-menu-group.increase:hover .entropy-submenu { left: 50%; transform: translate(-50%, 0); }
+        #node-context-menu .entropy-menu-group.decrease .entropy-submenu { left: 50%; transform: translate(-50%, -4px); }
+        #node-context-menu .entropy-menu-group.decrease:hover .entropy-submenu { left: 50%; transform: translate(-50%, 0); }
+        #node-context-menu .entropy-menu-group:hover .entropy-submenu {
+            opacity: 1;
+            visibility: visible;
+        }
+        #node-context-menu .entropy-submenu button {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+            background: transparent;
+            color: #334155;
+            transition: background 0.15s;
+        }
+        #node-context-menu .entropy-submenu button:hover {
+            background: rgba(0,0,0,0.06);
+        }
+        #node-context-menu .entropy-submenu button .submenu-icon {
+            width: 20px; height: 20px;
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #node-context-menu .entropy-submenu button .submenu-icon svg { width: 18px; height: 18px; }
+        #node-context-menu .entropy-submenu .increase-item button:hover { background: rgba(234, 88, 12, 0.12); color: #c2410c; }
+        #node-context-menu .entropy-submenu .decrease-item button:hover { background: rgba(13, 148, 136, 0.12); color: #0d9488; }
 
         /* 呼吸警示 */
         @keyframes pulse-red {
@@ -341,6 +481,10 @@
                 0 0 24px rgba(0, 255, 136, 0.15),
                 0 8px 32px rgba(0, 0, 0, 0.4) !important;
         }
+        body.theme-hackathon .node-level-0,
+        body.theme-hackathon .node-level-1 { border-left-color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon .node-level-2 { border-left-color: var(--hackathon-green) !important; }
+        body.theme-hackathon .node-level-3 { border-left-color: var(--hackathon-magenta) !important; }
         body.theme-hackathon .node-tip {
             border-color: rgba(0, 212, 255, 0.4) !important;
             color: var(--hackathon-blue) !important;
@@ -390,16 +534,42 @@
         body.theme-hackathon #sidebar .border-gray-100 { border-color: var(--hackathon-border) !important; }
         body.theme-hackathon #sidebar .hover\\:bg-gray-100:hover { background: rgba(0, 255, 249, 0.08) !important; }
         body.theme-hackathon #sidebar .hover\\:bg-gray-50:hover { background: rgba(0, 255, 249, 0.06) !important; }
-        body.theme-hackathon #node-context-menu {
-            background: var(--hackathon-surface) !important;
+        body.theme-hackathon #node-context-menu .entropy-menu-disk {
+            background: var(--hackathon-surface);
             border: 1px solid var(--hackathon-border);
-            box-shadow: 0 0 40px rgba(0, 255, 249, 0.1);
+            box-shadow: 0 0 40px rgba(0, 255, 249, 0.12);
         }
-        body.theme-hackathon #node-context-menu button {
-            color: var(--hackathon-text) !important;
+        body.theme-hackathon #node-context-menu .entropy-menu-group.increase .group-trigger {
+            color: var(--hackathon-magenta);
+            background: rgba(178, 75, 243, 0.15);
         }
-        body.theme-hackathon #node-context-menu button:hover {
-            background: rgba(0, 255, 249, 0.12) !important;
+        body.theme-hackathon #node-context-menu .entropy-menu-group.increase .group-trigger:hover {
+            background: rgba(178, 75, 243, 0.25);
+            box-shadow: 0 4px 16px rgba(178, 75, 243, 0.25);
+        }
+        body.theme-hackathon #node-context-menu .entropy-menu-group.decrease .group-trigger {
+            color: var(--hackathon-cyan);
+            background: rgba(0, 255, 249, 0.12);
+        }
+        body.theme-hackathon #node-context-menu .entropy-menu-group.decrease .group-trigger:hover {
+            background: rgba(0, 255, 249, 0.22);
+            box-shadow: 0 4px 16px rgba(0, 255, 249, 0.25);
+        }
+        body.theme-hackathon #node-context-menu .entropy-submenu {
+            background: var(--hackathon-surface);
+            border: 1px solid var(--hackathon-border);
+            box-shadow: 0 0 30px rgba(0, 255, 249, 0.08);
+        }
+        body.theme-hackathon #node-context-menu .entropy-submenu button {
+            color: var(--hackathon-text);
+        }
+        body.theme-hackathon #node-context-menu .entropy-submenu .increase-item button:hover {
+            background: rgba(178, 75, 243, 0.15);
+            color: var(--hackathon-magenta);
+        }
+        body.theme-hackathon #node-context-menu .entropy-submenu .decrease-item button:hover {
+            background: rgba(0, 255, 249, 0.15);
+            color: var(--hackathon-cyan);
         }
         body.theme-hackathon #question-float-card .text-gray-800,
         body.theme-hackathon #question-float-card .text-gray-700 { color: var(--hackathon-text) !important; }
@@ -440,6 +610,18 @@
             box-shadow: 0 0 12px rgba(0, 255, 249, 0.2);
         }
         body.theme-hackathon #chat-history .text-gray-800 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon .super-agent-burst { background: var(--hackathon-surface) !important; border-color: var(--hackathon-border) !important; }
+        body.theme-hackathon .super-agent-burst .burst-content,
+        body.theme-hackathon .super-agent-burst .text-gray-800 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon .super-agent-burst .burst-title,
+        body.theme-hackathon .super-agent-burst [class*="text-[#4285F4]"] { color: var(--hackathon-cyan) !important; }
+        body.theme-hackathon .super-agent-burst [class*="text-[#34A853]"] { color: var(--hackathon-green) !important; }
+        body.theme-hackathon .super-agent-burst .text-gray-500 { color: var(--hackathon-muted) !important; }
+        body.theme-hackathon #super-agent-center-box.super-agent-center-box { background: rgba(0,0,0,0.4) !important; border-color: var(--hackathon-border) !important; }
+        body.theme-hackathon #super-agent-center-overlay .text-white\/90,
+        body.theme-hackathon #super-agent-center-overlay .text-white\/85,
+        body.theme-hackathon #super-agent-center-overlay .text-white\/80,
+        body.theme-hackathon #super-agent-center-overlay .text-white\/75 { color: var(--hackathon-text) !important; }
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col items-center justify-center">
@@ -503,7 +685,7 @@
             </div>
         </div>
         <div class="p-4 border-t border-gray-100 text-center text-[11px] text-gray-400">
-            MindBridge AI · 当前为黑客松竞赛演示
+            熵导图 · 当前为黑客松竞赛演示
         </div>
     </aside>
 
@@ -516,6 +698,7 @@
                         <i class="fas fa-microchip text-xl"></i>
                     </div>
                     <div>
+                        <div class="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-0.5">熵导图</div>
                         <h2 id="project-title-display" class="font-black text-gray-900 tracking-tight text-lg">AI Project</h2>
                         <div class="flex gap-1 mt-0.5">
                             <div class="w-2 h-1 rounded-full bg-[#4285F4]"></div>
@@ -538,6 +721,9 @@
             </div>
 
             <div class="flex items-center gap-6">
+                <button id="super-agent-btn" class="bg-[#4285F4] text-white px-8 py-4 rounded-2xl font-black text-sm transition-all flex items-center gap-3 hover:scale-105 hover:shadow-xl active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100" title="自动发散：AI 追问 → AI 回答，导图像树枝一样扩散">
+                    <i class="fas fa-network-wired"></i> <span id="super-agent-btn-text">超级 Agent</span>
+                </button>
                 <button id="merge-btn" class="bg-gray-100 text-gray-300 px-10 py-4 rounded-2xl font-black text-sm transition-all flex items-center gap-3 cursor-not-allowed group">
                     <i class="fas fa-sparkles text-yellow-400 opacity-50 group-hover:rotate-12 transition-transform"></i> 融合项目成果
                 </button>
@@ -592,11 +778,48 @@
                 <div id="canvas-inner"></div>
             </div>
 
-            <!-- 节点右键：回答 / 追问 / Tips -->
-            <div id="node-context-menu" class="fixed z-[120] bg-white shadow-2xl rounded-2xl py-2 px-2 text-sm text-gray-800 hidden">
-                <button data-action="answer" class="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-lg">回答</button>
-                <button data-action="spawn" class="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-lg">追问</button>
-                <button data-action="tips" class="w-full text-left px-3 py-2 hover:bg-gray-100 rounded-lg">Tips</button>
+            <!-- 节点右键：熵导图圆盘 · 熵增方案 / 熵减方案（悬停展开子项） -->
+            <div id="node-context-menu" class="fixed z-[120] hidden" aria-hidden="true">
+                <div class="entropy-menu-disk">
+                    <div class="entropy-menu-group increase" data-group="increase">
+                        <button type="button" class="group-trigger" aria-haspopup="true" aria-expanded="false">
+                            <span class="group-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M12 10c0-2 1.5-4 4-4s4 2 4 4c0 2-2 3-2 5M12 10c0-2-1.5-4-4-4S4 8 4 10c0 2 2 3 2 5"/><path d="M12 4v2"/><circle cx="12" cy="8" r="1.5"/></svg>
+                            </span>
+                            <span class="group-label">熵增方案</span>
+                        </button>
+                        <div class="entropy-submenu" role="menu">
+                            <div class="increase-item" role="none">
+                                <button type="button" role="menuitem" data-action="spawn">
+                                    <span class="submenu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6M12 9v6"/><circle cx="12" cy="12" r="9"/><path d="M12 6v2M12 16v2M6 12h2M16 12h2"/></svg></span>
+                                    <span class="submenu-label">追问</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="entropy-menu-group decrease" data-group="decrease">
+                        <button type="button" class="group-trigger" aria-haspopup="true" aria-expanded="false">
+                            <span class="group-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 1.95.64 2.78a4.5 4.5 0 0 1 1.41 2.5"/><path d="M12 2v2"/></svg>
+                            </span>
+                            <span class="group-label">熵减方案</span>
+                        </button>
+                        <div class="entropy-submenu" role="menu">
+                            <div class="decrease-item" role="none">
+                                <button type="button" role="menuitem" data-action="answer">
+                                    <span class="submenu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l3-3h-2a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2l-3 3z"/><path d="M8 5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2l3 3-3-3h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2z"/></svg></span>
+                                    <span class="submenu-label">人工熵减</span>
+                                </button>
+                            </div>
+                            <div class="decrease-item" role="none">
+                                <button type="button" role="menuitem" data-action="tips">
+                                    <span class="submenu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5L12 2z"/><path d="M5 15l1.5 2L5 19l1.5 2"/><path d="M19 15l-1.5 2L19 19l-1.5 2"/></svg></span>
+                                    <span class="submenu-label">智能熵减</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- 底部：当前问题说明 + 作答框；容器 pointer-events-none 避免挡住下半区节点，子元素在显示时由 JS 恢复可点 -->
@@ -639,16 +862,60 @@
                 <div class="space-y-1">
                     <h2 class="text-5xl font-black tracking-tighter text-google-gradient">项目全景方案</h2>
                     <p class="text-gray-400 font-bold text-lg">PROJECT COMPLETION BLUEPRINT</p>
+                    <p class="text-gray-400 text-sm mt-2">以当前脑图全部节点问答为唯一依据生成，全面覆盖不篡改</p>
                 </div>
                 <button onclick="closeModal()" class="w-16 h-16 rounded-full hover:bg-gray-50 flex items-center justify-center text-gray-400 transition-all border border-gray-100">
                     <i class="fas fa-times text-2xl"></i>
                 </button>
             </div>
-            <div class="flex-1 overflow-y-auto p-20" id="result-content"></div>
+            <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-20 custom-scrollbar" id="result-content"></div>
             <div class="p-12 border-t border-gray-50 flex gap-8">
-                <button class="flex-1 bg-[#4285F4] text-white py-6 rounded-[30px] font-black text-xl shadow-2xl shadow-blue-200 hover:scale-[1.02] transition-transform">下载 PDF 报告</button>
+                <button id="download-pdf-btn" type="button" class="flex-1 bg-[#4285F4] text-white py-6 rounded-[30px] font-black text-xl shadow-2xl shadow-blue-200 hover:scale-[1.02] transition-transform">下载 PDF 报告</button>
                 <button class="flex-1 bg-white border-4 border-[#34A853] text-[#34A853] py-6 rounded-[30px] font-black text-xl hover:bg-green-50 transition-colors">分享至协作平台</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 中央半透明托管状态：发散中时显示进度与预计完成时间，可透视背后导图 -->
+    <div id="super-agent-center-overlay" class="fixed inset-0 flex items-center justify-center z-[240] pointer-events-none opacity-0 transition-opacity duration-300">
+        <div id="super-agent-center-box" class="super-agent-center-box text-center px-6 py-8 rounded-[32px] bg-black/20 backdrop-blur-[6px] border border-white/20 shadow-2xl min-w-[280px]">
+            <div id="super-agent-phase-title" class="text-2xl md:text-3xl font-black text-white/90 tracking-tight mb-4">AI 托管发散中</div>
+            <div id="super-agent-progress-text" class="text-lg font-bold text-white/85 mb-1">目前进度 0%</div>
+            <div id="super-agent-detail" class="text-sm font-semibold text-white/80 mb-2 min-h-[1.25rem]"></div>
+            <div id="super-agent-eta-text" class="text-base font-semibold text-white/75">预计约 — 后完成收敛</div>
+        </div>
+    </div>
+
+    <!-- 超级 Agent 四周爆发式弹窗：加大尺寸与字号，强化信息处理感 -->
+    <div id="super-agent-burst-1" class="super-agent-burst fixed top-[8%] left-[3%] w-[min(92vw,360px)] min-h-[100px] glass rounded-[24px] shadow-2xl border-2 border-[#4285F4]/30 p-5 z-[250] opacity-0 pointer-events-none transition-all duration-300 transform -translate-x-4" data-position="tl">
+        <div class="text-xs font-black uppercase tracking-wider text-[#4285F4] mb-3 burst-title">当前问题</div>
+        <div class="burst-content text-gray-800 font-semibold text-sm leading-relaxed whitespace-pre-wrap max-h-[140px] overflow-y-auto"></div>
+    </div>
+    <div id="super-agent-burst-2" class="super-agent-burst fixed top-[8%] right-[3%] w-[min(92vw,360px)] min-h-[100px] glass rounded-[24px] shadow-2xl border-2 border-[#4285F4]/30 p-5 z-[250] opacity-0 pointer-events-none transition-all duration-300 transform translate-x-4" data-position="tr">
+        <div class="text-xs font-black uppercase tracking-wider text-[#4285F4] mb-3 burst-title">选取方案</div>
+        <div class="burst-content text-gray-800 font-semibold text-sm leading-relaxed whitespace-pre-wrap max-h-[140px] overflow-y-auto"></div>
+    </div>
+    <div id="super-agent-burst-3" class="super-agent-burst fixed bottom-[12%] right-[3%] w-[min(92vw,340px)] min-h-[90px] glass rounded-[24px] shadow-2xl border-2 border-[#34A853]/35 p-5 z-[250] opacity-0 pointer-events-none transition-all duration-300 transform translate-x-4" data-position="br">
+        <div class="text-xs font-black uppercase tracking-wider text-[#34A853] mb-3 burst-title">已应用</div>
+        <div class="burst-content text-gray-800 font-semibold text-sm leading-relaxed whitespace-pre-wrap max-h-[120px] overflow-y-auto"></div>
+    </div>
+    <div id="super-agent-burst-4" class="super-agent-burst fixed bottom-[12%] left-[3%] w-[min(92vw,340px)] min-h-[90px] glass rounded-[24px] shadow-2xl border-2 border-white/50 p-5 z-[250] opacity-0 pointer-events-none transition-all duration-300 transform -translate-x-4" data-position="bl">
+        <div class="text-xs font-black uppercase tracking-wider text-gray-500 mb-3 burst-title">本步完成</div>
+        <div class="burst-content text-gray-800 font-semibold text-sm leading-relaxed whitespace-pre-wrap max-h-[120px] overflow-y-auto"></div>
+    </div>
+
+    <!-- 左右侧模型标识（含大 Logo）+ 底部退出（与超级 Agent overlay 同显隐） -->
+    <div id="super-agent-extra" class="fixed inset-0 z-[235] pointer-events-none opacity-0 transition-opacity duration-300" aria-hidden="true">
+        <div class="absolute left-[2%] top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 bg-black/20 backdrop-blur-sm px-5 py-4 rounded-2xl border border-white/20">
+            <img src="https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/stepfun-color.png" alt="StepFun" class="w-20 h-20 object-contain flex-shrink-0" width="80" height="80" />
+            <span class="text-sm font-bold text-white/90 whitespace-nowrap">STEPFUN 已接管项目</span>
+        </div>
+        <div class="absolute right-[2%] top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 bg-black/20 backdrop-blur-sm px-5 py-4 rounded-2xl border border-white/20">
+2            <img src="https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/deepseek-color.png" alt="DeepSeek" class="w-20 h-20 object-contain flex-shrink-0" width="80" height="80" />
+            <span class="text-sm font-bold text-white/90 whitespace-nowrap">DeepSeek 已介入协助编写</span>
+        </div>
+        <div class="absolute bottom-[2%] left-1/2 -translate-x-1/2 pointer-events-auto">
+            <button id="super-agent-exit-btn" type="button" class="px-8 py-3 rounded-2xl font-black text-sm bg-white/20 hover:bg-white/30 border border-white/40 text-white backdrop-blur-sm transition-all">退出</button>
         </div>
     </div>
 

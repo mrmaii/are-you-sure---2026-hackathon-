@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 from typing import List
 
@@ -18,6 +19,7 @@ from .ai_client import AIClient
 from .db import get_session, init_db
 from .models import Node, NodeAnswer, Project
 from .schemas import (
+  AnswerSuggestResponse,
   DraftCreateRequest,
   DraftCreateResponse,
   DraftMessageRequest,
@@ -291,7 +293,7 @@ async def spawn_node(
   session: Session = Depends(get_session),
 ) -> NodeOut:
   """
-  基于已回答节点，生成一个新的追问子节点。
+  基于已回答节点生成追问子节点。始终仅用模型返回的专业追问，无兜底（含 100% 后追加）。
   """
   try:
     new_node = await spawn_followup_node(session, project_id, node_id, ai_client=AIClient())
@@ -302,6 +304,7 @@ async def spawn_node(
     if msg == "node_not_found":
       raise HTTPException(status_code=404, detail="node_not_found")
     if msg in {"no_answer", "no_followup"}:
+      logging.getLogger("uvicorn.error").info("spawn 400: %s (project=%s node=%s)", msg, project_id, node_id)
       raise HTTPException(status_code=400, detail=msg)
     raise
 
@@ -393,6 +396,33 @@ async def spawn_tips(
     node_type=new_node.node_type,
     skill_id=getattr(new_node, "skill_id", None),
   )
+
+
+@app.post(
+  "/api/projects/{project_id}/nodes/{node_id}/answer/suggest",
+  response_model=AnswerSuggestResponse,
+)
+async def suggest_node_answer(
+  project_id: str,
+  node_id: str,
+  session: Session = Depends(get_session),
+) -> AnswerSuggestResponse:
+  """自动模式用：针对节点问题生成直接回答（追问+回答为主，非 Tips）。"""
+  project = session.get(Project, project_id)
+  if not project:
+    raise HTTPException(status_code=404, detail="project_not_found")
+  node = session.get(Node, node_id)
+  if not node or node.project_id != project.id:
+    raise HTTPException(status_code=404, detail="node_not_found")
+  question = (getattr(node, "question", None) or "").strip()
+  if not question:
+    return AnswerSuggestResponse(content="")
+  ai = AIClient()
+  skill_content = get_skill_content_for_node(session, project_id, node_id)
+  content = await ai.generate_node_answer(
+    project.idea_text or "", question, skill_content=skill_content
+  )
+  return AnswerSuggestResponse(content=(content or "").strip())
 
 
 @app.post(
