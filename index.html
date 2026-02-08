@@ -137,6 +137,13 @@
             box-shadow: 0 4px 14px rgba(30, 136, 229, 0.12);
         }
 
+        .node-material {
+            background: #F8F9FA;
+            color: #5F6368;
+            border: 2px solid rgba(95, 99, 104, 0.35);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+        }
+
         .node-active {
             box-shadow: 0 0 0 5px rgba(66, 133, 244, 0.3);
             z-index: 50 !important;
@@ -342,11 +349,11 @@
             position: relative;
             cursor: grab;
             background-color: #f1f5f9;
-            background-image: url("https://www.svgrepo.com/download/399308/topography.svg");
-            background-size: cover;
-            background-repeat: no-repeat;
-            background-position: center;
-            opacity: 0.92;
+            background-image:
+                linear-gradient(#fff 1px, transparent 1px),
+                linear-gradient(90deg, #fff 1px, transparent 1px);
+            background-size: 28px 28px;
+            background-position: 0 0;
         }
         #canvas-container:active { cursor: grabbing; }
         #canvas-inner {
@@ -572,7 +579,8 @@
             color: var(--hackathon-cyan);
         }
         body.theme-hackathon #question-float-card .text-gray-800,
-        body.theme-hackathon #question-float-card .text-gray-700 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon #question-float-card .text-gray-700,
+        body.theme-hackathon #question-float-card .text-gray-900 { color: var(--hackathon-text) !important; }
         /* 候选答案卡片：保持深色正文，避免浅字在浅灰底上不可见 */
         body.theme-hackathon #question-float-card .candidate-answer-card,
         body.theme-hackathon #question-float-card .candidate-answer-card-content { color: #1e293b !important; }
@@ -795,6 +803,12 @@
                                     <span class="submenu-label">追问</span>
                                 </button>
                             </div>
+                            <div class="increase-item" role="none">
+                                <button type="button" role="menuitem" data-action="web-search">
+                                    <span class="submenu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span>
+                                    <span class="submenu-label">网页</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="entropy-menu-group decrease" data-group="decrease">
@@ -817,9 +831,21 @@
                                     <span class="submenu-label">智能熵减</span>
                                 </button>
                             </div>
+                            <div class="decrease-item link-materials-wrap" role="none">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-2 py-1">链接材料</div>
+                                <div id="context-menu-materials" class="flex flex-col gap-0.5 max-h-32 overflow-y-auto"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- 空白右键：导入材料 -->
+            <div id="blank-context-menu" class="fixed z-[120] hidden rounded-xl glass px-3 py-2 shadow-xl border border-white/30 min-w-[140px]">
+                <button type="button" id="blank-menu-import-material" class="w-full text-left px-3 py-2 rounded-lg text-sm font-semibold text-gray-700 hover:bg-white/50 flex items-center gap-2">
+                    <i class="fas fa-link text-[#4285F4]"></i>
+                    <span>导入材料</span>
+                </button>
             </div>
 
             <!-- 底部：当前问题说明 + 作答框；容器 pointer-events-none 避免挡住下半区节点，子元素在显示时由 JS 恢复可点 -->
@@ -830,7 +856,7 @@
                             <span class="px-2.5 py-1 bg-[#4285F4]/10 text-[#4285F4] rounded-lg text-[10px] font-black uppercase tracking-wider">当前问题</span>
                             <span id="question-float-title" class="text-lg font-black text-gray-800"></span>
                         </div>
-                        <div id="question-float-text" class="text-gray-700 font-medium text-sm leading-relaxed max-h-56 overflow-y-auto custom-scrollbar pr-1"></div>
+                        <div id="question-float-text" class="text-gray-900 font-medium text-sm leading-relaxed max-h-56 overflow-y-auto custom-scrollbar pr-1"></div>
                     </div>
                 </div>
                 <!-- 作答框 -->

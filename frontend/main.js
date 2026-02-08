@@ -20,6 +20,9 @@ const state = {
   tipsCandidates: {}, // nodeId -> string[] Tips 候选
   tipsLoading: {}, // nodeId -> true 表示正在加载 Tips 候选
   contextMenu: { visible: false, nodeId: null },
+  contextLinks: [], // 共享上下文连线 [{ node_a_id, node_b_id }]
+  drawingContextLink: null, // 长按拖线中 { fromNodeId, endX, endY }，end 为 canvas-inner 坐标
+  blankMenuCanvasPos: null, // 空白处右键时的画布坐标，用于新导入的材料节点落点
   skills: [], // Agent Skills 列表 { id, name }
   skillId: null, // 当前选中的技能 id，用于优化回答质量
   superAgentRunning: false, // 超级 Agent 是否正在运行
@@ -74,9 +77,14 @@ const contextMenuButtons = contextMenu
   ? Array.from(contextMenu.querySelectorAll("button[data-action]"))
   : [];
 
-// 脑图区域内一律禁止浏览器右键菜单，避免与节点右键菜单冲突
+// 脑图区域：节点上右键开圆盘菜单，空白处右键开「导入材料」
 if (mindmapView) {
-  mindmapView.addEventListener("contextmenu", (e) => e.preventDefault());
+  mindmapView.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (e.target.closest(".node")) return;
+    closeNodeContextMenu();
+    openBlankContextMenu(e.clientX, e.clientY);
+  });
 }
 
 // 全局屏蔽外来点击反应：禁止浏览器/插件右键菜单、系统拖拽、避免误触产生第三方弹窗
@@ -92,6 +100,7 @@ document.addEventListener("selectstart", (e) => e.preventDefault(), true);
 
 function openNodeContextMenu(x, y, nodeId) {
   if (!contextMenu) return;
+  closeBlankContextMenu();
   state.contextMenu.visible = true;
   state.contextMenu.nodeId = nodeId;
 
@@ -112,6 +121,10 @@ function openNodeContextMenu(x, y, nodeId) {
   const groupDecrease = contextMenu.querySelector(".entropy-menu-group.decrease");
   const btnSpawn = contextMenu.querySelector('button[data-action="spawn"]');
   const spawnLabel = btnSpawn ? btnSpawn.querySelector(".submenu-label") : null;
+  const btnWebSearch = contextMenu.querySelector('button[data-action="web-search"]');
+  const webSearchWrap = btnWebSearch ? btnWebSearch.closest(".increase-item") : null;
+  const materialsWrap = contextMenu.querySelector(".link-materials-wrap");
+  const materialsContainer = document.getElementById("context-menu-materials");
 
   if (node && node.node_type === "section") {
     if (groupDecrease) groupDecrease.style.display = "none";
@@ -121,9 +134,11 @@ function openNodeContextMenu(x, y, nodeId) {
       btnSpawn.disabled = false;
       btnSpawn.classList.remove("opacity-50", "cursor-not-allowed");
     }
+    if (webSearchWrap) webSearchWrap.style.display = "none";
   } else {
     if (groupDecrease) groupDecrease.style.display = "flex";
     if (groupIncrease) groupIncrease.style.display = "flex";
+    if (webSearchWrap) webSearchWrap.style.display = "";
     const canSpawn = node && (node.status === "green" || node.status === "ai");
     if (btnSpawn) {
       btnSpawn.disabled = !canSpawn;
@@ -133,14 +148,57 @@ function openNodeContextMenu(x, y, nodeId) {
     }
     if (spawnLabel) spawnLabel.textContent = canSpawn ? "追问" : "请先回答后再追问";
   }
+
+  if (materialsContainer && materialsWrap) {
+    const materials = state.nodes.filter((n) => n.node_type === "material");
+    materialsContainer.innerHTML = "";
+    if (materials.length) {
+      materialsWrap.style.display = "";
+      materials.forEach((m) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:bg-black/5 flex items-center gap-2 truncate";
+        btn.setAttribute("role", "menuitem");
+        btn.setAttribute("data-action", "link-material");
+        btn.setAttribute("data-material-id", m.id);
+        btn.textContent = (m.title || m.question || "材料").slice(0, 20);
+        materialsContainer.appendChild(btn);
+      });
+    } else {
+      materialsWrap.style.display = "none";
+    }
+  }
 }
 
 function closeNodeContextMenu() {
   if (!contextMenu) return;
   state.contextMenu.visible = false;
   state.contextMenu.nodeId = null;
+  state.contextMenu.materialId = null;
   contextMenu.classList.add("hidden");
   contextMenu.classList.remove("menu-visible");
+}
+
+const blankContextMenu = document.getElementById("blank-context-menu");
+function openBlankContextMenu(x, y) {
+  if (!blankContextMenu) return;
+  if (typeof clientToCanvasInner === "function") {
+    state.blankMenuCanvasPos = clientToCanvasInner(x, y);
+  }
+  const padding = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const rect = blankContextMenu.getBoundingClientRect();
+  let left = x;
+  let top = y;
+  if (left + (rect.width || 160) + padding > vw) left = vw - (rect.width || 160) - padding;
+  if (top + (rect.height || 60) + padding > vh) top = vh - (rect.height || 60) - padding;
+  blankContextMenu.style.left = `${left}px`;
+  blankContextMenu.style.top = `${top}px`;
+  blankContextMenu.classList.remove("hidden");
+}
+function closeBlankContextMenu() {
+  if (blankContextMenu) blankContextMenu.classList.add("hidden");
 }
 
 function showToast(text, type) {
@@ -330,6 +388,7 @@ async function startAction(overriddenContent, fileDisplayName) {
       });
       state.projectId = project.id;
       state.nodes = project.nodes;
+      state.contextLinks = project.context_links || [];
       state.draftId = null;
       updateProgress(project.progress);
       await switchView();
@@ -468,7 +527,7 @@ function buildMap() {
   if (!state.nodes.length) return;
 
   const nodes = state.nodes;
-  const root = nodes.find((n) => n.level === 0);
+  const root = nodes.find((n) => n.level === 0 && n.node_type !== "material");
   if (!root) return;
 
   const pos = new Map();
@@ -541,6 +600,12 @@ function buildMap() {
     }
   }
 
+  // 材料节点（导入的网站）：放在画布左侧一列，可拖线关联上下文
+  const materials = nodes.filter((n) => n.node_type === "material");
+  materials.forEach((m, i) => {
+    pos.set(m.id, { x: 120, y: 380 + i * 100, level: 0, angle: null, width: 180 });
+  });
+
   // 与已保存的拖动位置合并（保留用户拖过的位置）
   nodes.forEach((n) => {
     const p = pos.get(n.id);
@@ -573,6 +638,7 @@ function buildMap() {
     const div = document.createElement("div");
     div.id = `node-${n.id}`;
     const isTip = n.node_type === "tip" || n.status === "ai";
+    const isMaterial = n.node_type === "material";
     const isRoot = n.level === 0;
     const root = nodes.find((r) => r.level === 0);
     const isSection = n.node_type === "section" || (n.level === 1 && root && n.parent_id === root.id);
@@ -581,8 +647,8 @@ function buildMap() {
     div.className = `node absolute rounded-[28px] font-black text-sm shadow-xl flex items-center justify-center cursor-pointer ${levelClass} ${
       isRoot ? "node-root p-5 gap-2 flex-col" : isSection ? "node-section p-4 gap-2 flex-col" : "p-6 text-center"
     } ${
-      isTip ? "node-tip" : (n.status === "red" ? "node-red" : "node-green")
-    } ${!isTip && n.status === "red" ? "pulse-node" : ""}`;
+      isMaterial ? "node-material" : isTip ? "node-tip" : (n.status === "red" ? "node-red" : "node-green")
+    } ${!isTip && !isMaterial && n.status === "red" ? "pulse-node" : ""}`;
     div.style.left = `${p.x}px`;
     div.style.top = `${p.y}px`;
     div.style.width = `${width}px`;
@@ -602,11 +668,19 @@ function buildMap() {
           <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">板块</span>
           <span class="font-semibold text-center leading-tight">${escapeHtml(title)}</span>
         </div>`;
+    } else if (isMaterial) {
+      div.innerHTML = `
+        <div class="flex flex-col items-center gap-1.5 text-gray-800 w-full">
+          <i class="fas fa-link text-xl text-[#5F6368]"></i>
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">材料</span>
+          <span class="font-semibold text-center leading-tight break-words line-clamp-2">${escapeHtml(title)}</span>
+        </div>`;
     } else {
       div.innerHTML = escapeHtml(getNodeShortTitle(n));
     }
     div.onmousedown = (e) => {
       e.stopPropagation();
+      if (e.button !== 0) return;
       state.draggingNode = n.id;
       state.didDragThisSession = false;
       state.dragStart = {
@@ -615,6 +689,17 @@ function buildMap() {
         left: p.x,
         top: p.y,
       };
+      state._contextLinkTimer = setTimeout(() => {
+        state._contextLinkTimer = null;
+        const pos = state.nodePositions[n.id];
+        const w = (pos && pos.width) || LAYOUT.nodeWidth;
+        const startX = pos ? pos.left + w / 2 : 0;
+        const startY = pos ? pos.top + LAYOUT.nodeHeight / 2 : 0;
+        state.drawingContextLink = { fromNodeId: state.draggingNode, endX: startX, endY: startY };
+        state.draggingNode = null;
+        state.dragStart = null;
+        updateConnectors();
+      }, 400);
     };
     div.onclick = (e) => {
       // 若本次交互是拖拽移动，就不触发选中
@@ -641,7 +726,7 @@ function renderConnectors(svgEl, nodes, posMap) {
   if (!svgEl) svgEl = document.getElementById("connector-svg");
   if (!svgEl) return;
   svgEl.innerHTML = "";
-  const root = nodes.find((r) => r.level === 0);
+  const root = nodes.find((r) => r.level === 0 && r.node_type !== "material");
   const curveOffset = 80; // 曲线弯曲程度
 
   nodes.forEach((n) => {
@@ -691,6 +776,61 @@ function renderConnectors(svgEl, nodes, posMap) {
     if (isHackathon) path.classList.add("connector-hackathon");
     svgEl.appendChild(path);
   });
+
+  // 共享上下文连线：粗、半透明、虚线
+  (state.contextLinks || []).forEach((link) => {
+    const aPos = posMap.get(link.node_a_id);
+    const bPos = posMap.get(link.node_b_id);
+    if (!aPos || !bPos) return;
+    const aw = aPos.width || LAYOUT.nodeWidth;
+    const bw = bPos.width || LAYOUT.nodeWidth;
+    const sx = aPos.x + aw / 2;
+    const sy = aPos.y + LAYOUT.nodeHeight / 2;
+    const ex = bPos.x + bw / 2;
+    const ey = bPos.y + LAYOUT.nodeHeight / 2;
+    const d = `M ${sx} ${sy} L ${ex} ${ey}`;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke-linecap", "round");
+    const isHackathon = document.body.classList.contains("theme-hackathon");
+    path.setAttribute("stroke", isHackathon ? "rgba(0,255,249,0.5)" : "rgba(66,133,244,0.5)");
+    path.setAttribute("stroke-width", "4");
+    path.setAttribute("stroke-dasharray", "12 8");
+    path.classList.add("connector-context-link");
+    svgEl.appendChild(path);
+  });
+
+  // 长按拖线预览：从节点到当前鼠标
+  if (state.drawingContextLink && state.drawingContextLink.endX != null) {
+    const fromPos = posMap.get(state.drawingContextLink.fromNodeId);
+    if (fromPos) {
+      const w = fromPos.width || LAYOUT.nodeWidth;
+      const sx = fromPos.x + w / 2;
+      const sy = fromPos.y + LAYOUT.nodeHeight / 2;
+      const ex = state.drawingContextLink.endX;
+      const ey = state.drawingContextLink.endY;
+      const preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      preview.setAttribute("d", `M ${sx} ${sy} L ${ex} ${ey}`);
+      preview.setAttribute("fill", "none");
+      preview.setAttribute("stroke", "rgba(66,133,244,0.7)");
+      preview.setAttribute("stroke-width", "3");
+      preview.setAttribute("stroke-dasharray", "8 6");
+      preview.setAttribute("stroke-linecap", "round");
+      svgEl.appendChild(preview);
+    }
+  }
+}
+
+// 将屏幕坐标转为 canvas-inner 内坐标（与 nodePositions 同系）
+// 与 syncCanvas 的 translate(-50%+x,-50%+y) scale(s) 对应：inner 中心 (2000,2000) 在容器 (canvas.x, canvas.y)
+function clientToCanvasInner(clientX, clientY) {
+  if (!canvasContainer) return { x: 0, y: 0 };
+  const rect = canvasContainer.getBoundingClientRect();
+  const s = state.canvas.scale;
+  const x = 2000 + (clientX - rect.left - state.canvas.x) / s;
+  const y = 2000 + (clientY - rect.top - state.canvas.y) / s;
+  return { x, y };
 }
 
 // 根据 state.nodePositions 重算连线（拖动时调用）
@@ -719,6 +859,7 @@ async function triggerSectionQuestionFromNode(nodeId) {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes;
+      state.contextLinks = project.context_links || [];
     } catch (_) {
       state.nodes = state.nodes.concat(newNode);
     }
@@ -983,6 +1124,7 @@ async function runSuperAgent() {
           if (spawnOk > 0) consecutive100Rounds = 0;
           const project = await apiJson(`/api/projects/${state.projectId}`);
           state.nodes = project.nodes || state.nodes;
+          state.contextLinks = project.context_links || state.contextLinks;
           if (project.progress) updateProgress(project.progress);
           buildMap();
           updateCenterOverlay(
@@ -1052,6 +1194,7 @@ async function runSuperAgent() {
 
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes || state.nodes;
+      state.contextLinks = project.context_links || state.contextLinks;
       if (project.progress) updateProgress(project.progress);
       buildMap();
 
@@ -1077,6 +1220,7 @@ async function runSuperAgent() {
     // 收敛阶段：剩余红点全部答完，完成度冲到 100%
     let project = await apiJson(`/api/projects/${state.projectId}`);
     state.nodes = project.nodes || state.nodes;
+    state.contextLinks = project.context_links || state.contextLinks;
     const phaseTitleEl = document.getElementById("super-agent-phase-title");
     if (phaseTitleEl) phaseTitleEl.textContent = "AI 托管收敛中";
     let convergeRounds = 0;
@@ -1111,6 +1255,7 @@ async function runSuperAgent() {
       }
       project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes || state.nodes;
+      state.contextLinks = project.context_links || state.contextLinks;
       if (project.progress) {
         updateProgress(project.progress);
         const newPct = project.progress.percent;
@@ -1126,6 +1271,7 @@ async function runSuperAgent() {
     hideCenterOverlay();
     const projectFinal = await apiJson(`/api/projects/${state.projectId}`);
     state.nodes = projectFinal.nodes || state.nodes;
+    state.contextLinks = projectFinal.context_links || state.contextLinks;
     if (projectFinal.progress) updateProgress(projectFinal.progress);
     buildMap();
     if (totalExpanded > 0 || (projectFinal.progress && projectFinal.progress.percent >= 100)) {
@@ -1170,6 +1316,7 @@ async function triggerSpawnFromNode(nodeId) {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes;
+      state.contextLinks = project.context_links || [];
     } catch (_) {
       state.nodes = state.nodes.concat(newNode);
     }
@@ -1202,6 +1349,7 @@ async function triggerTipsFromNode(nodeId) {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes;
+      state.contextLinks = project.context_links || [];
     } catch (_) {
       state.nodes = state.nodes.concat(newNode);
     }
@@ -1272,7 +1420,7 @@ function renderTipsCandidates(node) {
   cands.forEach((content, idx) => {
     const card = document.createElement("div");
     card.className =
-      "px-5 py-4 rounded-2xl bg-white/90 border border-blue-100 text-gray-800 cursor-pointer hover:bg-blue-50 transition-colors flex flex-col gap-2";
+      "px-5 py-4 rounded-2xl bg-white/90 border border-blue-100 text-gray-900 cursor-pointer hover:bg-blue-50 transition-colors flex flex-col gap-2";
 
     const title = document.createElement("div");
     title.className = "text-xs font-black text-blue-600 uppercase tracking-wider";
@@ -1309,6 +1457,7 @@ async function chooseTip(nodeId, content) {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes || state.nodes;
+      state.contextLinks = project.context_links || state.contextLinks;
     } catch (_) {
       // 退路：仅在本地更新该节点
       state.nodes = state.nodes.map((n) => (n.id === node.id ? { ...n, ...node } : n));
@@ -1364,7 +1513,7 @@ async function generateAnswerCandidatesForQuestion(node) {
     cands.forEach((content, idx) => {
       const wrapper = document.createElement("div");
       wrapper.className =
-        "candidate-answer-card p-5 rounded-2xl bg-white/90 border border-blue-100 text-sm text-gray-800 flex flex-col gap-3";
+        "candidate-answer-card p-5 rounded-2xl bg-white/90 border border-blue-100 text-sm text-gray-900 flex flex-col gap-3";
 
       const titleRow = document.createElement("div");
       titleRow.className = "flex items-center justify-between gap-2";
@@ -1395,7 +1544,7 @@ async function generateAnswerCandidatesForQuestion(node) {
       titleRow.appendChild(btnRow);
 
       const textDiv = document.createElement("div");
-      textDiv.className = "candidate-answer-card-content leading-relaxed text-sm text-gray-800";
+      textDiv.className = "candidate-answer-card-content leading-relaxed text-sm text-gray-900";
       textDiv.textContent = content;
 
       wrapper.appendChild(titleRow);
@@ -1443,6 +1592,7 @@ async function createTipFromQuestion(nodeId, content) {
   try {
     const project = await apiJson(`/api/projects/${state.projectId}`);
     state.nodes = project.nodes || state.nodes;
+    state.contextLinks = project.context_links || state.contextLinks;
     buildMap();
   } catch (_) {}
 
@@ -1478,6 +1628,7 @@ async function applyTipAsAnswer(nodeId, content) {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes || state.nodes;
+      state.contextLinks = project.context_links || state.contextLinks;
     } catch (_) {
       // 退路：仅更新当前节点
       const updatedNode = res.updatedNode || res.node || res;
@@ -1494,6 +1645,60 @@ async function applyTipAsAnswer(nodeId, content) {
   } catch (e) {
     console.error(e);
     showToast("应用 AI 回答失败", "red");
+  }
+}
+
+// 熵增·网页：按节点搜最相关例子
+async function triggerWebSearchForNode(nodeId) {
+  if (!state.projectId) return;
+  closeNodeContextMenu();
+  try {
+    const res = await apiJson(
+      `/api/projects/${state.projectId}/nodes/${nodeId}/web-search`,
+      { method: "POST" },
+    );
+    const results = res.results || [];
+    if (!results.length) {
+      showToast("未搜到相关网页（可配置 SEARCH_API_KEY 如 Serper）", "blue");
+      return;
+    }
+    const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${(r.snippet || "").slice(0, 80)}…`);
+    if (questionFloatTitle) questionFloatTitle.textContent = "相关网页";
+    if (questionFloatText) questionFloatText.textContent = lines.join("\n\n");
+    if (questionFloat) {
+      questionFloat.classList.remove("opacity-0", "translate-y-2", "pointer-events-none");
+      questionFloat.classList.add("pointer-events-auto");
+      if (questionFloatCard) {
+        questionFloatCard.classList.remove("pointer-events-none");
+        questionFloatCard.classList.add("pointer-events-auto");
+      }
+    }
+    showToast(`已找到 ${results.length} 条相关网页`, "blue");
+  } catch (e) {
+    console.error(e);
+    showToast(e && e.message ? e.message : "搜索失败", "red");
+  }
+}
+
+// 链接材料到当前节点（建立共享上下文）
+async function linkMaterialToNode(nodeId, materialId) {
+  if (!state.projectId) return;
+  try {
+    await apiJson(`/api/projects/${state.projectId}/context-links`, {
+      method: "POST",
+      body: JSON.stringify({ node_a_id: nodeId, node_b_id: materialId }),
+    });
+    const a = nodeId < materialId ? nodeId : materialId;
+    const b = nodeId < materialId ? materialId : nodeId;
+    state.contextLinks = state.contextLinks || [];
+    if (!state.contextLinks.some((l) => l.node_a_id === a && l.node_b_id === b)) {
+      state.contextLinks.push({ node_a_id: a, node_b_id: b });
+    }
+    updateConnectors();
+    showToast("已链接材料到本节点，可作上下文参考", "blue");
+  } catch (e) {
+    console.error(e);
+    showToast(e && e.message ? e.message : "链接失败", "red");
   }
 }
 
@@ -1530,6 +1735,15 @@ function handleContextMenuClick(action) {
     } else {
       triggerSpawnFromNode(nodeId);
     }
+  } else if (action === "web-search") {
+    triggerWebSearchForNode(nodeId);
+  } else if (action === "link-material") {
+    const materialId = state.contextMenu.materialId;
+    if (materialId && state.projectId) {
+      linkMaterialToNode(nodeId, materialId);
+    }
+    closeNodeContextMenu();
+    return;
   } else if (action === "tips") {
     // 右键 Tips：根据是否已回答来决定行为
     if (node.status === "green" || node.status === "ai") {
@@ -1641,7 +1855,7 @@ function selectNode(id, options = {}) {
       }
     } else {
       questionFloatText.className =
-        "text-gray-700 font-medium text-sm leading-relaxed max-h-[50vh] overflow-y-auto custom-scrollbar pr-1";
+        "text-gray-900 font-medium text-sm leading-relaxed max-h-[50vh] overflow-y-auto custom-scrollbar pr-1";
       questionFloatText.textContent = node.question || "请简要回答。";
     }
   }
@@ -1694,8 +1908,24 @@ mindmapView.addEventListener("mousedown", (e) => {
   }
 });
 window.onmousemove = (e) => {
-  // 拖动单个节点：更新位置与连线
+  // 长按拖线中：更新预览线终点
+  if (state.drawingContextLink) {
+    const pt = clientToCanvasInner(e.clientX, e.clientY);
+    state.drawingContextLink.endX = pt.x;
+    state.drawingContextLink.endY = pt.y;
+    updateConnectors();
+    return;
+  }
+  // 拖动单个节点：若长按计时未到且移动超过阈值则取消长按
   if (state.draggingNode) {
+    if (state._contextLinkTimer && state.dragStart) {
+      const dx = e.clientX - state.dragStart.clientX;
+      const dy = e.clientY - state.dragStart.clientY;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        clearTimeout(state._contextLinkTimer);
+        state._contextLinkTimer = null;
+      }
+    }
     const id = state.draggingNode;
     const start = state.dragStart;
     if (!start) return;
@@ -1728,7 +1958,43 @@ window.onmousemove = (e) => {
   syncCanvas();
   state.mouse = { x: e.clientX, y: e.clientY };
 };
-window.onmouseup = () => {
+window.onmouseup = (e) => {
+  if (state.drawingContextLink) {
+    const fromId = state.drawingContextLink.fromNodeId;
+    let toId = null;
+    const cx = e && e.clientX != null ? e.clientX : 0;
+    const cy = e && e.clientY != null ? e.clientY : 0;
+    state.nodes.forEach((node) => {
+      if (node.id === fromId) return;
+      const el = document.getElementById(`node-${node.id}`);
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom) toId = node.id;
+    });
+    if (toId && state.projectId) {
+      (async () => {
+        try {
+          await apiJson(`/api/projects/${state.projectId}/context-links`, {
+            method: "POST",
+            body: JSON.stringify({ node_a_id: fromId, node_b_id: toId }),
+          });
+          state.contextLinks = state.contextLinks || [];
+          state.contextLinks.push({ node_a_id: fromId < toId ? fromId : toId, node_b_id: fromId < toId ? toId : fromId });
+          updateConnectors();
+          showToast("已建立共享上下文连线", "blue");
+        } catch (err) {
+          console.error(err);
+          showToast(err && err.message ? err.message : "建立连线失败", "red");
+        }
+      })();
+    }
+    state.drawingContextLink = null;
+    updateConnectors();
+  }
+  if (state._contextLinkTimer) {
+    clearTimeout(state._contextLinkTimer);
+    state._contextLinkTimer = null;
+  }
   if (state.draggingNode) {
     state.dragStart = null;
     state.draggingNode = null;
@@ -1762,22 +2028,60 @@ document.addEventListener(
 );
 
 window.addEventListener("click", (e) => {
-  if (!contextMenu || contextMenu.classList.contains("hidden")) return;
-  if (!e.target.closest || !e.target.closest("#node-context-menu")) {
+  if (contextMenu && !contextMenu.classList.contains("hidden") && (!e.target.closest || !e.target.closest("#node-context-menu"))) {
     closeNodeContextMenu();
+  }
+  if (blankContextMenu && !blankContextMenu.classList.contains("hidden") && (!e.target.closest || !e.target.closest("#blank-context-menu"))) {
+    closeBlankContextMenu();
   }
 });
 
-// 绑定右键菜单按钮点击事件
-if (contextMenuButtons && contextMenuButtons.length) {
-  contextMenuButtons.forEach((btn) => {
+// 绑定右键菜单按钮点击（委托，支持动态添加的「链接材料」）
+if (contextMenu) {
+  contextMenu.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    e.stopPropagation();
     const action = btn.getAttribute("data-action");
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (action) handleContextMenuClick(action);
-    });
+    if (action === "link-material") state.contextMenu.materialId = btn.getAttribute("data-material-id");
+    if (action) handleContextMenuClick(action);
   });
 }
+
+// 空白右键·导入材料
+document.getElementById("blank-menu-import-material")?.addEventListener("click", async () => {
+  closeBlankContextMenu();
+  const url = window.prompt("输入网页链接或材料 URL：");
+  if (!url || !url.trim()) return;
+  if (!state.projectId) {
+    showToast("请先进入项目", "red");
+    return;
+  }
+  const title = window.prompt("材料标题（可选，直接回车则用 URL）：", url.slice(0, 50));
+  try {
+    const created = await apiJson(`/api/projects/${state.projectId}/materials`, {
+      method: "POST",
+      body: JSON.stringify({ url: url.trim(), title: title != null ? title.trim() : null }),
+    });
+    if (state.blankMenuCanvasPos && created && created.id) {
+      const pt = state.blankMenuCanvasPos;
+      const w = 180;
+      state.nodePositions[created.id] = {
+        left: pt.x - w / 2,
+        top: pt.y - LAYOUT.nodeHeight / 2,
+        width: w,
+      };
+    }
+    const project = await apiJson(`/api/projects/${state.projectId}`);
+    state.nodes = project.nodes || state.nodes;
+    state.contextLinks = project.context_links || state.contextLinks;
+    buildMap();
+    showToast("已导入材料，可在节点右键「熵减方案」中链接材料到节点", "blue");
+  } catch (e) {
+    console.error(e);
+    showToast(e && e.message ? e.message : "导入失败", "red");
+  }
+});
 
 const CANVAS_SCALE_MIN = 0.25;
 const CANVAS_SCALE_MAX = 3;
@@ -1815,6 +2119,7 @@ async function submitAnswer() {
     try {
       const project = await apiJson(`/api/projects/${state.projectId}`);
       state.nodes = project.nodes;
+      state.contextLinks = project.context_links || state.contextLinks;
     } catch (_) {
       const updated = res.updatedNode;
       state.nodes = state.nodes.map((n) =>

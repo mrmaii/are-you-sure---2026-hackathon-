@@ -37,6 +37,16 @@ class ProgressOut(BaseModel):
   percent: int
 
 
+class ContextLinkOut(BaseModel):
+  node_a_id: str
+  node_b_id: str
+
+
+class ContextLinkCreateRequest(BaseModel):
+  node_a_id: str
+  node_b_id: str
+
+
 class ProjectOut(BaseModel):
   id: str
   name: str
@@ -47,6 +57,7 @@ class ProjectOut(BaseModel):
   nodes: List[NodeOut]
   progress: ProgressOut
   skill_id: Optional[str] = None
+  context_links: List[ContextLinkOut] = []
 
 
 class ProjectListItem(BaseModel):
@@ -96,6 +107,21 @@ class AnswerSuggestResponse(BaseModel):
 
 class TipsChooseRequest(BaseModel):
   content: str
+
+
+class WebSearchResult(BaseModel):
+  title: str
+  snippet: str
+  url: str
+
+
+class WebSearchResponse(BaseModel):
+  results: List[WebSearchResult]
+
+
+class MaterialCreateRequest(BaseModel):
+  url: str
+  title: Optional[str] = None
 
 
 # ---------- Draft 立项对话 ----------

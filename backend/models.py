@@ -71,3 +71,11 @@ class ProjectDialogBase(SQLModel):
 class ProjectDialog(ProjectDialogBase, table=True):
   id: Optional[int] = Field(default=None, primary_key=True)
   created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ContextLink(SQLModel, table=True):
+  """两节点共享上下文：长按节点拖到另一节点建立粗半透明虚线，二者共享上下文。"""
+  id: Optional[int] = Field(default=None, primary_key=True)
+  project_id: str = Field(foreign_key="project.id")
+  node_a_id: str = Field(foreign_key="node.id")
+  node_b_id: str = Field(foreign_key="node.id")

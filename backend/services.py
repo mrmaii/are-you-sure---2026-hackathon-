@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlmodel import Session, select
 
 from .ai_client import AIClient
-from .models import Draft, Node, NodeAnswer, Project, ProjectDialog
+from .models import ContextLink, Draft, Node, NodeAnswer, Project, ProjectDialog
 from .skills import (
   get_skill_content,
   get_supervisor_content,
@@ -32,6 +32,8 @@ def _short_title(text: str, fallback: str) -> str:
 def flatten_nodes(nodes: List[Node], parent_id: Optional[str] = None) -> List[Node]:
   tree: List[Node] = []
   children = [n for n in nodes if n.parent_id == parent_id]
+  if parent_id is None:
+    children = [n for n in children if getattr(n, "node_type", "question") != "material"]
   children.sort(key=lambda n: n.order_index)
   for c in children:
     tree.append(c)
@@ -44,7 +46,7 @@ def calc_progress(all_nodes: List[Node]) -> Tuple[int, int, int]:
   questions = [
     n
     for n in all_nodes
-    if getattr(n, "node_type", "question") not in ("tip", "section")
+    if getattr(n, "node_type", "question") not in ("tip", "section", "material")
     and getattr(n, "level", 0) > 0
   ]
   total = len(questions)
@@ -340,6 +342,42 @@ def get_skill_content_for_node(
   return combined[:8000] if len(combined) > 8000 else combined
 
 
+def get_linked_context_for_node(
+  session: Session, project_id: str, node_id: str
+) -> str:
+  """与该节点通过「链接上下文」关联的其它节点内容（材料节点=网页正文，普通节点=最新回答），供回答/Tips 时参考。"""
+  links = session.exec(
+    select(ContextLink).where(
+      ContextLink.project_id == project_id,
+      (ContextLink.node_a_id == node_id) | (ContextLink.node_b_id == node_id),
+    )
+  ).all()
+  if not links:
+    return ""
+  parts: List[str] = []
+  for link in links:
+    other_id = link.node_b_id if link.node_a_id == node_id else link.node_a_id
+    node = session.get(Node, other_id)
+    if not node or node.project_id != project_id:
+      continue
+    title = (node.title or node.question or "关联节点")[:50]
+    if getattr(node, "node_type", "question") == "material":
+      ans = session.exec(
+        select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
+      ).first()
+      content = (ans.content if ans else node.question or "").strip()
+    else:
+      ans = session.exec(
+        select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
+      ).first()
+      content = (ans.content if ans else "").strip()
+    if content:
+      parts.append(f"【{title}】\n{content[:8000]}")
+  if not parts:
+    return ""
+  return "\n\n---\n\n".join(parts)[:12000]
+
+
 async def answer_node_and_trace(
   session: Session,
   project_id: str,
@@ -461,6 +499,9 @@ async def spawn_followup_node(
 
   node_skill_id = _resolve_node_skill_id(session, project_id, node.id, nodes)
   skill_content = get_skill_content_for_node(session, project_id, node.id, nodes)
+  linked = get_linked_context_for_node(session, project_id, node.id)
+  if linked:
+    skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
   result = await ai_client.node_answer_judge_and_followups(
     project.idea_text,
     node.question,
@@ -582,6 +623,41 @@ async def spawn_tips_node(
   )
   session.add(new_node)
 
+  session.commit()
+  session.refresh(new_node)
+  return new_node
+
+
+def create_material_node(
+  session: Session,
+  project_id: str,
+  url: str,
+  title: Optional[str] = None,
+  content: Optional[str] = None,
+) -> Node:
+  """导入网站/材料：创建 node_type=material 的节点并放置到画布；content 为抓取的网页正文，存 NodeAnswer，供关联上下文参考。"""
+  project, nodes = get_project_with_nodes(session, project_id)
+  materials = [n for n in nodes if getattr(n, "node_type", "") == "material"]
+  order_index = max([n.order_index for n in materials], default=0) + 1
+  new_id = _uuid()
+  title_str = (title or "").strip() or (url[:50] + "…" if len(url) > 50 else url)
+  new_node = Node(
+    id=new_id,
+    project_id=project.id,
+    parent_id=None,
+    level=0,
+    title=title_str,
+    question=url.strip()[:2000],
+    status="green",
+    order_index=order_index,
+    node_type="material",
+    skill_id=None,
+  )
+  session.add(new_node)
+  session.flush()
+  if content and content.strip():
+    answer = NodeAnswer(node_id=new_node.id, content=content.strip()[:50000])
+    session.add(answer)
   session.commit()
   session.refresh(new_node)
   return new_node

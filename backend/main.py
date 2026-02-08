@@ -5,8 +5,10 @@ import base64
 import io
 import logging
 import os
-from typing import List
+import re
+from typing import List, Optional
 
+import httpx
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -17,14 +19,17 @@ from sqlmodel import Session, select
 
 from .ai_client import AIClient
 from .db import get_session, init_db
-from .models import Node, NodeAnswer, Project
+from .models import ContextLink, Node, NodeAnswer, Project
 from .schemas import (
   AnswerSuggestResponse,
+  ContextLinkCreateRequest,
+  ContextLinkOut,
   DraftCreateRequest,
   DraftCreateResponse,
   DraftMessageRequest,
   DraftMessageResponse,
   FromDraftRequest,
+  MaterialCreateRequest,
   MergeResponse,
   NodeAnswerRequest,
   NodeAnswerResponse,
@@ -37,6 +42,8 @@ from .schemas import (
   ShortTitleResponse,
   TipsCandidatesResponse,
   TipsChooseRequest,
+  WebSearchResponse,
+  WebSearchResult,
 )
 from .services import (
   answer_node_and_trace,
@@ -46,12 +53,30 @@ from .services import (
   create_project_from_idea,
   draft_append_message,
   flatten_nodes,
+  get_linked_context_for_node,
   get_skill_content_for_node,
+  create_material_node,
   spawn_followup_node,
   spawn_section_question,
   spawn_tips_node,
 )
 from .skills import get_skill_content, list_skills
+
+
+async def fetch_url_content(url: str, max_chars: int = 50000) -> str:
+  """抓取 URL 正文（去 HTML 标签），失败返回空或错误说明。"""
+  try:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+      r = await client.get(url)
+      r.raise_for_status()
+      html = r.text
+  except Exception as e:
+    return f"(无法获取该网页内容：{getattr(e, 'message', str(e))[:100]})"
+  text = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+  text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+  text = re.sub(r"<[^>]+>", " ", text)
+  text = re.sub(r"\s+", " ", text).strip()
+  return (text or "(无正文)")[:max_chars]
 
 
 app = FastAPI(title="AI Mindmap Backend")
@@ -85,8 +110,14 @@ def api_list_skills() -> dict:
   return {"skills": list_skills()}
 
 
-def _project_to_out(project: Project, nodes: List[Node]) -> ProjectOut:
+def _project_to_out(
+  project: Project,
+  nodes: List[Node],
+  context_links: Optional[List[ContextLinkOut]] = None,
+) -> ProjectOut:
   flat = flatten_nodes(nodes)
+  materials = [n for n in nodes if getattr(n, "node_type", "") == "material"]
+  all_nodes_out = flat + materials
   total, green, percent = calc_progress(flat)
   return ProjectOut(
     id=project.id,
@@ -108,10 +139,11 @@ def _project_to_out(project: Project, nodes: List[Node]) -> ProjectOut:
         node_type=getattr(n, "node_type", "question"),
         skill_id=getattr(n, "skill_id", None),
       )
-      for n in flat
+      for n in all_nodes_out
     ],
     progress=ProgressOut(total=total, green=green, percent=percent),
     skill_id=getattr(project, "skill_id", None),
+    context_links=context_links or [],
   )
 
 
@@ -216,7 +248,104 @@ def get_project(project_id: str, session: Session = Depends(get_session)) -> Pro
   if not project:
     raise HTTPException(status_code=404, detail="project_not_found")
   nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
-  return _project_to_out(project, nodes)
+  links = session.exec(
+    select(ContextLink).where(ContextLink.project_id == project_id)
+  ).all()
+  context_links = [
+    ContextLinkOut(node_a_id=l.node_a_id, node_b_id=l.node_b_id) for l in links
+  ]
+  return _project_to_out(project, nodes, context_links)
+
+
+@app.post(
+  "/api/projects/{project_id}/context-links",
+  response_model=ContextLinkOut,
+)
+def add_context_link(
+  project_id: str,
+  payload: ContextLinkCreateRequest,
+  session: Session = Depends(get_session),
+) -> ContextLinkOut:
+  project = session.get(Project, project_id)
+  if not project:
+    raise HTTPException(status_code=404, detail="project_not_found")
+  a, b = payload.node_a_id, payload.node_b_id
+  if a == b:
+    raise HTTPException(status_code=400, detail="same_node")
+  node_a = session.get(Node, a)
+  node_b = session.get(Node, b)
+  if not node_a or node_a.project_id != project_id:
+    raise HTTPException(status_code=404, detail="node_not_found")
+  if not node_b or node_b.project_id != project_id:
+    raise HTTPException(status_code=404, detail="node_not_found")
+  node_a_id, node_b_id = (a, b) if a < b else (b, a)
+  existing = session.exec(
+    select(ContextLink).where(
+      ContextLink.project_id == project_id,
+      ContextLink.node_a_id == node_a_id,
+      ContextLink.node_b_id == node_b_id,
+    )
+  ).first()
+  if existing:
+    return ContextLinkOut(node_a_id=node_a_id, node_b_id=node_b_id)
+  link = ContextLink(project_id=project_id, node_a_id=node_a_id, node_b_id=node_b_id)
+  session.add(link)
+  session.commit()
+  return ContextLinkOut(node_a_id=node_a_id, node_b_id=node_b_id)
+
+
+@app.post(
+  "/api/projects/{project_id}/nodes/{node_id}/web-search",
+  response_model=WebSearchResponse,
+)
+async def web_search_for_node(
+  project_id: str,
+  node_id: str,
+  session: Session = Depends(get_session),
+) -> WebSearchResponse:
+  """熵增·网页：按节点问题 + 项目构想搜最相关例子。需配置 SEARCH_API_KEY（如 Serper）。"""
+  project = session.get(Project, project_id)
+  if not project:
+    raise HTTPException(status_code=404, detail="project_not_found")
+  node = session.get(Node, node_id)
+  if not node or node.project_id != project_id:
+    raise HTTPException(status_code=404, detail="node_not_found")
+  query = f"{project.idea_text or ''} {node.question or ''}".strip() or node.title or "相关案例"
+  ai = AIClient()
+  raw = await ai.search_web(query, max_results=5)
+  results = [WebSearchResult(title=r["title"], snippet=r["snippet"], url=r["url"]) for r in raw]
+  return WebSearchResponse(results=results)
+
+
+@app.post(
+  "/api/projects/{project_id}/materials",
+  response_model=NodeOut,
+)
+async def create_material(
+  project_id: str,
+  payload: MaterialCreateRequest,
+  session: Session = Depends(get_session),
+) -> NodeOut:
+  """空白右键·导入网站：抓取网页内容，创建为画布上的材料节点，可再通过「链接上下文」与其它节点关联，回答时会参考其内容。"""
+  project = session.get(Project, project_id)
+  if not project:
+    raise HTTPException(status_code=404, detail="project_not_found")
+  content = await fetch_url_content(payload.url.strip())
+  new_node = create_material_node(
+    session, project_id, payload.url.strip(), title=payload.title, content=content
+  )
+  return NodeOut(
+    id=new_node.id,
+    project_id=new_node.project_id,
+    parent_id=new_node.parent_id,
+    level=new_node.level,
+    title=new_node.title,
+    question=new_node.question,
+    status=new_node.status,
+    order_index=new_node.order_index,
+    node_type=getattr(new_node, "node_type", "question"),
+    skill_id=getattr(new_node, "skill_id", None),
+  )
 
 
 @app.post(
@@ -419,6 +548,9 @@ async def suggest_node_answer(
     return AnswerSuggestResponse(content="")
   ai = AIClient()
   skill_content = get_skill_content_for_node(session, project_id, node_id)
+  linked = get_linked_context_for_node(session, project_id, node_id)
+  if linked:
+    skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
   content = await ai.generate_node_answer(
     project.idea_text or "", question, skill_content=skill_content
   )
@@ -444,6 +576,9 @@ async def get_tips_candidates(
 
   ai = AIClient()
   skill_content = get_skill_content_for_node(session, project_id, node_id)
+  linked = get_linked_context_for_node(session, project_id, node_id)
+  if linked:
+    skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
 
   if getattr(node, "node_type", "question") == "tip":
     parent = session.get(Node, node.parent_id) if node.parent_id else None
