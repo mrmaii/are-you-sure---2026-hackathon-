@@ -1,0 +1,33 @@
+/**
+ * 前端全局状态（项目/脑图/画布/菜单/超级 Agent 等）
+ */
+export const state = {
+  projectId: null,
+  draftId: null,
+  title: "New Project",
+  nodes: [],
+  activeId: null,
+  canvas: { x: 0, y: 0, scale: 1 },
+  isDragging: false,
+  mouse: { x: 0, y: 0 },
+  dialog: [],
+  nodePositions: {},
+  titled: {},
+  fetchingTitle: {},
+  draggingNode: null,
+  dragStart: null,
+  didDragThisSession: false,
+  tipsCandidates: {},
+  tipsLoading: {},
+  contextMenu: { visible: false, nodeId: null },
+  contextLinks: [],
+  drawingContextLink: null,
+  blankMenuCanvasPos: null,
+  skills: [],
+  skillId: null,
+  superAgentRunning: false,
+  superAgentAbortRequested: false,
+  webSearchForNodeId: null,
+  lastMergeContent: null,
+  lastMergeTitle: null,
+};

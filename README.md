@@ -85,4 +85,14 @@ uvicorn backend.main:app --reload
 
 ---
 
+---
+
+## 项目文档
+
+更多说明见项目根目录与 `docs/` 下文档：
+
+- **产品需求与接口**：[PRD-产品需求文档.md](PRD-产品需求文档.md)
+- **文档索引**（PRD、决策、架构、宣传片策划等）：[docs/README.md](docs/README.md)
+- **架构说明**（目录结构、前后端职责）：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
 感谢使用。若你有想法或问题，欢迎提 Issue 或直接联系我。

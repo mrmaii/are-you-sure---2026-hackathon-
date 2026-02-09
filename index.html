@@ -587,6 +587,20 @@
         body.theme-hackathon #question-float-card .candidate-answer-card .text-blue-600 { color: var(--hackathon-cyan) !important; }
         body.theme-hackathon #question-float-card [class*="bg-[#4285F4]"] { background: rgba(0, 255, 249, 0.15) !important; }
         body.theme-hackathon #question-float-card [class*="text-[#4285F4]"] { color: var(--hackathon-cyan) !important; }
+        /* 网站选择面板：始终使用紫色，不随 hackathon 青蓝主题覆盖 */
+        body.theme-hackathon #web-search-panel {
+            background: linear-gradient(to bottom, rgba(126, 34, 206, 0.95), rgba(88, 28, 135, 0.95)) !important;
+            border: 2px solid rgba(192, 132, 252, 0.6) !important;
+            box-shadow: 0 25px 50px -12px rgba(88, 28, 135, 0.4) !important;
+        }
+        body.theme-hackathon #web-search-panel .text-white\/95,
+        body.theme-hackathon #web-search-panel .text-white { color: rgba(255,255,255,0.95) !important; }
+        body.theme-hackathon #web-search-panel .bg-white\/20 { background: rgba(255,255,255,0.2) !important; }
+        body.theme-hackathon #web-search-panel .hover\:bg-white\/30:hover { background: rgba(255,255,255,0.3) !important; }
+        body.theme-hackathon #web-search-panel .text-gray-700,
+        body.theme-hackathon #web-search-panel .text-gray-800 { color: var(--hackathon-text) !important; }
+        body.theme-hackathon #web-search-panel [class*="bg-[#4285F4]"] { background: rgba(147, 51, 234, 0.3) !important; }
+        body.theme-hackathon #web-search-panel [class*="text-[#4285F4]"] { color: #e9d5ff !important; }
         body.theme-hackathon #node-panel .text-gray-800,
         body.theme-hackathon #node-panel .text-gray-500 { color: var(--hackathon-text) !important; }
         body.theme-hackathon #node-panel .text-gray-400 { color: var(--hackathon-muted) !important; }
@@ -878,6 +892,18 @@
                 </div>
                 </div>
             </div>
+
+            <!-- 右侧：紫色网站选择面板（只显示介绍与类型，不显示域名；点选即创建节点并链接） -->
+            <div id="web-search-panel" class="fixed top-1/2 right-8 -translate-y-1/2 w-[380px] max-w-[90vw] rounded-[28px] p-5 shadow-2xl z-30 opacity-0 pointer-events-none transition-all duration-300 translate-x-4 overflow-hidden flex flex-col min-w-0 bg-gradient-to-b from-purple-500/95 to-purple-700/95 border-2 border-purple-300/60 backdrop-blur-xl" aria-hidden="true">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <span class="px-2.5 py-1 bg-white/20 text-white rounded-lg text-[10px] font-black uppercase tracking-wider">选择网站</span>
+                    <button type="button" id="web-search-panel-close" class="w-8 h-8 rounded-lg hover:bg-white/30 flex items-center justify-center text-white/90 transition-colors" aria-label="关闭">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p id="web-search-panel-intro" class="text-white/95 font-medium text-sm leading-relaxed mb-4 break-words"></p>
+                <div id="web-search-panel-list" class="flex flex-col gap-3 max-h-[50vh] overflow-y-auto overflow-x-hidden custom-scrollbar pr-1 min-w-0"></div>
+            </div>
         </section>
     </main>
 
@@ -937,7 +963,7 @@
             <span class="text-sm font-bold text-white/90 whitespace-nowrap">STEPFUN 已接管项目</span>
         </div>
         <div class="absolute right-[2%] top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 bg-black/20 backdrop-blur-sm px-5 py-4 rounded-2xl border border-white/20">
-2            <img src="https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/deepseek-color.png" alt="DeepSeek" class="w-20 h-20 object-contain flex-shrink-0" width="80" height="80" />
+            <img src="https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/deepseek-color.png" alt="DeepSeek" class="w-20 h-20 object-contain flex-shrink-0" width="80" height="80" />
             <span class="text-sm font-bold text-white/90 whitespace-nowrap">DeepSeek 已介入协助编写</span>
         </div>
         <div class="absolute bottom-[2%] left-1/2 -translate-x-1/2 pointer-events-auto">

@@ -12,7 +12,7 @@ import httpx
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
@@ -21,6 +21,7 @@ from .ai_client import AIClient
 from .db import get_session, init_db
 from .models import ContextLink, Node, NodeAnswer, Project
 from .schemas import (
+  AnswerSuggestRequest,
   AnswerSuggestResponse,
   ContextLinkCreateRequest,
   ContextLinkOut,
@@ -40,6 +41,7 @@ from .schemas import (
   ProjectListItem,
   ProjectOut,
   ShortTitleResponse,
+  TipsCandidatesRequest,
   TipsCandidatesResponse,
   TipsChooseRequest,
   WebSearchResponse,
@@ -294,6 +296,43 @@ def add_context_link(
   return ContextLinkOut(node_a_id=node_a_id, node_b_id=node_b_id)
 
 
+def _web_search_query_for_node(
+  project_idea_text: Optional[str],
+  node: Node,
+  all_nodes: List[Node],
+) -> str:
+  """按权重构建搜索 query：当前支点最高，路径上父节点次之（离当前越近权重越高），项目主体一句话带过。"""
+  node_map = {n.id: n for n in all_nodes}
+  parts: List[str] = []
+  # 1. 当前支点权重最高：完整问题与标题
+  q = (node.question or "").strip()
+  t = (node.title or "").strip()
+  if q:
+    parts.append(q)
+  if t and t != q:
+    parts.append(t)
+  # 2. 从父到根路径：离当前越近权重越高，总长限制避免抢戏
+  ancestor_titles: List[str] = []
+  cur = node
+  while cur.parent_id:
+    parent = node_map.get(cur.parent_id)
+    if not parent:
+      break
+    at = (parent.title or parent.question or "").strip()
+    if at and at not in ancestor_titles:
+      ancestor_titles.append(at)
+    cur = parent
+  path_part = " ".join(ancestor_titles[:5])[:80]  # 最多 5 层、总长 80 字
+  if path_part:
+    parts.append(path_part)
+  # 3. 项目主体权重最低：一句话带过（约 30 字）
+  idea_brief = (project_idea_text or "").strip()[:30]
+  if idea_brief:
+    parts.append(idea_brief)
+  query = " ".join(p for p in parts if p).strip()
+  return query or (node.title or "相关案例")
+
+
 @app.post(
   "/api/projects/{project_id}/nodes/{node_id}/web-search",
   response_model=WebSearchResponse,
@@ -303,14 +342,18 @@ async def web_search_for_node(
   node_id: str,
   session: Session = Depends(get_session),
 ) -> WebSearchResponse:
-  """熵增·网页：按节点问题 + 项目构想搜最相关例子。需配置 SEARCH_API_KEY（如 Serper）。"""
+  """熵增·网页：按节点问题 + 路径上下文 + 项目构想（低权）搜最相关例子。需配置 SEARCH_API_KEY（如 Serper）。"""
   project = session.get(Project, project_id)
   if not project:
     raise HTTPException(status_code=404, detail="project_not_found")
   node = session.get(Node, node_id)
   if not node or node.project_id != project_id:
     raise HTTPException(status_code=404, detail="node_not_found")
-  query = f"{project.idea_text or ''} {node.question or ''}".strip() or node.title or "相关案例"
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  all_nodes = list(nodes)
+  query = _web_search_query_for_node(project.idea_text, node, all_nodes)
+  if not os.environ.get("SEARCH_API_KEY", "").strip():
+    return WebSearchResponse(results=[], hint="请先在项目根目录 .env 中配置 SEARCH_API_KEY（如 Serper）以使用网页搜索")
   ai = AIClient()
   raw = await ai.search_web(query, max_results=5)
   results = [WebSearchResult(title=r["title"], snippet=r["snippet"], url=r["url"]) for r in raw]
@@ -420,12 +463,15 @@ async def spawn_node(
   project_id: str,
   node_id: str,
   session: Session = Depends(get_session),
+  allow_fallback: bool = Query(True, description="无追问时是否使用兜底文案创建子节点；超级 Agent 传 false 以跳过无质量追问"),
 ) -> NodeOut:
   """
-  基于已回答节点生成追问子节点。始终仅用模型返回的专业追问，无兜底（含 100% 后追加）。
+  基于已回答节点生成追问子节点。allow_fallback=True 时无追问用兜底；False 时无追问返回 400 no_followup。
   """
   try:
-    new_node = await spawn_followup_node(session, project_id, node_id, ai_client=AIClient())
+    new_node = await spawn_followup_node(
+      session, project_id, node_id, ai_client=AIClient(), allow_fallback=allow_fallback
+    )
   except ValueError as e:  # noqa: B902
     msg = str(e)
     if msg == "project_not_found":
@@ -535,8 +581,9 @@ async def suggest_node_answer(
   project_id: str,
   node_id: str,
   session: Session = Depends(get_session),
+  payload: Optional[AnswerSuggestRequest] = Body(None),
 ) -> AnswerSuggestResponse:
-  """自动模式用：针对节点问题生成直接回答（追问+回答为主，非 Tips）。"""
+  """自动模式用：针对节点问题生成直接回答。可选 body.web_snippets 注入网页搜索摘要。"""
   project = session.get(Project, project_id)
   if not project:
     raise HTTPException(status_code=404, detail="project_not_found")
@@ -551,6 +598,12 @@ async def suggest_node_answer(
   linked = get_linked_context_for_node(session, project_id, node_id)
   if linked:
     skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
+  if payload and payload.web_snippets:
+    snippet_block = "网页参考（供参考）：\n" + "\n\n".join(
+      (s or "").strip() for s in payload.web_snippets[:5] if (s or "").strip()
+    )[:4000]
+    if snippet_block:
+      skill_content = (skill_content or "") + "\n\n" + snippet_block
   content = await ai.generate_node_answer(
     project.idea_text or "", question, skill_content=skill_content
   )
@@ -565,8 +618,9 @@ async def get_tips_candidates(
   project_id: str,
   node_id: str,
   session: Session = Depends(get_session),
+  payload: Optional[TipsCandidatesRequest] = Body(None),
 ) -> TipsCandidatesResponse:
-  """给 Tips 节点拉 2～3 条可选文案。"""
+  """给 Tips 节点拉 2～3 条可选文案。可选 body.web_snippets 注入网页搜索摘要。"""
   project = session.get(Project, project_id)
   if not project:
     raise HTTPException(status_code=404, detail="project_not_found")
@@ -579,6 +633,12 @@ async def get_tips_candidates(
   linked = get_linked_context_for_node(session, project_id, node_id)
   if linked:
     skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
+  if payload and payload.web_snippets:
+    snippet_block = "网页参考（供参考）：\n" + "\n\n".join(
+      (s or "").strip() for s in payload.web_snippets[:5] if (s or "").strip()
+    )[:4000]
+    if snippet_block:
+      skill_content = (skill_content or "") + "\n\n" + snippet_block
 
   if getattr(node, "node_type", "question") == "tip":
     parent = session.get(Node, node.parent_id) if node.parent_id else None

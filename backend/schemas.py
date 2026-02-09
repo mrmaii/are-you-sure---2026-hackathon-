@@ -96,8 +96,18 @@ class ShortTitleResponse(BaseModel):
   title: str
 
 
+class TipsCandidatesRequest(BaseModel):
+  """可选：超级 Agent 等场景传入网页搜索摘要，拼入候选生成上下文"""
+  web_snippets: Optional[List[str]] = None
+
+
 class TipsCandidatesResponse(BaseModel):
   candidates: List[str]
+
+
+class AnswerSuggestRequest(BaseModel):
+  """可选：超级 Agent 等场景传入网页搜索摘要，拼入回答生成上下文"""
+  web_snippets: Optional[List[str]] = None
 
 
 class AnswerSuggestResponse(BaseModel):
@@ -117,6 +127,7 @@ class WebSearchResult(BaseModel):
 
 class WebSearchResponse(BaseModel):
   results: List[WebSearchResult]
+  hint: Optional[str] = None  # 未配置密钥等时提示用户
 
 
 class MaterialCreateRequest(BaseModel):

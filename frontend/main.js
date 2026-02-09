@@ -1,81 +1,61 @@
 // 前端入口：立项对话 + 脑图工作台，请求本地 8000 端口
-const API_BASE = "http://localhost:8000";
+import {
+  API_BASE,
+  LAYOUT,
+  CONNECTOR_MORPHOLOGY,
+  CANVAS_SCALE_MIN,
+  CANVAS_SCALE_MAX,
+  ALLOWED_DOC_TYPES,
+  SUPER_AGENT_BURST_IDS,
+} from "./config.js";
+import { state } from "./state.js";
+import {
+  topBar,
+  projectTitleDisplay,
+  progressText,
+  progressFill,
+  mergeBtn,
+  superAgentBtn,
+  superAgentBtnText,
+  heroSection,
+  chatHistory,
+  dropZone,
+  dropFileInput,
+  initialInput,
+  startBtn,
+  chatView,
+  mindmapView,
+  canvasContainer,
+  canvasInner,
+  nodePanel,
+  activeNodeName,
+  nodeInput,
+  nodeSubmit,
+  questionFloat,
+  questionFloatTitle,
+  questionFloatText,
+  questionFloatCard,
+  toastEl,
+  toastIcon,
+  toastText,
+  skillSelect,
+  superAgentCenterOverlay,
+  superAgentProgressText,
+  superAgentDetail,
+  superAgentEtaText,
+  resultModal,
+  resultContent,
+  contextMenu,
+  contextMenuButtons,
+  webSearchPanel,
+  webSearchPanelIntro,
+  webSearchPanelList,
+  webSearchPanelClose,
+} from "./dom.js";
+import { apiJson, readFileAsBase64, uploadAndParseDocument } from "./api.js";
+import { showToast } from "./utils.js";
 
-const state = {
-  projectId: null,
-  draftId: null,
-  title: "New Project",
-  nodes: [],
-  activeId: null,
-  canvas: { x: 0, y: 0, scale: 1 },
-  isDragging: false,
-  mouse: { x: 0, y: 0 },
-  dialog: [],
-  nodePositions: {}, // id -> { left, top, width } 用于拖动与连线
-  titled: {}, // nodeId -> true 表示已用 AI 起过名
-  fetchingTitle: {}, // nodeId -> true 表示正在请求 AI 标题
-  draggingNode: null, // 节点拖拽移动
-  dragStart: null,
-  didDragThisSession: false,
-  tipsCandidates: {}, // nodeId -> string[] Tips 候选
-  tipsLoading: {}, // nodeId -> true 表示正在加载 Tips 候选
-  contextMenu: { visible: false, nodeId: null },
-  contextLinks: [], // 共享上下文连线 [{ node_a_id, node_b_id }]
-  drawingContextLink: null, // 长按拖线中 { fromNodeId, endX, endY }，end 为 canvas-inner 坐标
-  blankMenuCanvasPos: null, // 空白处右键时的画布坐标，用于新导入的材料节点落点
-  skills: [], // Agent Skills 列表 { id, name }
-  skillId: null, // 当前选中的技能 id，用于优化回答质量
-  superAgentRunning: false, // 超级 Agent 是否正在运行
-  superAgentAbortRequested: false, // 用户点击「退出」请求中止
-};
-
-// DOM
-const topBar = document.getElementById("top-bar");
-const projectTitleDisplay = document.getElementById("project-title-display");
-const progressText = document.getElementById("progress-text");
-const progressFill = document.getElementById("progress-fill");
-const mergeBtn = document.getElementById("merge-btn");
-const superAgentBtn = document.getElementById("super-agent-btn");
-const superAgentBtnText = document.getElementById("super-agent-btn-text");
-
-const heroSection = document.getElementById("hero-section");
-const chatHistory = document.getElementById("chat-history");
-const dropZone = document.getElementById("drop-zone");
-const dropFileInput = document.getElementById("drop-file-input");
-const initialInput = document.getElementById("initial-input");
-const startBtn = document.getElementById("start-btn");
-
-const chatView = document.getElementById("chat-view");
-const mindmapView = document.getElementById("mindmap-view");
-const canvasContainer = document.getElementById("canvas-container");
-const canvasInner = document.getElementById("canvas-inner");
-
-const nodePanel = document.getElementById("node-panel");
-const activeNodeName = document.getElementById("active-node-name");
-const nodeInput = document.getElementById("node-input");
-const nodeSubmit = document.getElementById("node-submit");
-
-const questionFloat = document.getElementById("question-float");
-const questionFloatTitle = document.getElementById("question-float-title");
-const questionFloatText = document.getElementById("question-float-text");
-const questionFloatCard = document.getElementById("question-float-card");
-
-const toastEl = document.getElementById("toast");
-const toastIcon = document.getElementById("toast-icon");
-const toastText = document.getElementById("toast-text");
-const skillSelect = document.getElementById("skill-select");
-const SUPER_AGENT_BURST_IDS = ["super-agent-burst-1", "super-agent-burst-2", "super-agent-burst-3", "super-agent-burst-4"];
-const superAgentCenterOverlay = document.getElementById("super-agent-center-overlay");
-const superAgentProgressText = document.getElementById("super-agent-progress-text");
-const superAgentDetail = document.getElementById("super-agent-detail");
-const superAgentEtaText = document.getElementById("super-agent-eta-text");
-
-const resultModal = document.getElementById("result-modal");
-const resultContent = document.getElementById("result-content");
-const contextMenu = document.getElementById("node-context-menu");
-const contextMenuButtons = contextMenu
-  ? Array.from(contextMenu.querySelectorAll("button[data-action]"))
-  : [];
+if (typeof window !== "undefined") window.showToast = showToast;
 
 // 脑图区域：节点上右键开圆盘菜单，空白处右键开「导入材料」
 if (mindmapView) {
@@ -201,32 +181,6 @@ function closeBlankContextMenu() {
   if (blankContextMenu) blankContextMenu.classList.add("hidden");
 }
 
-function showToast(text, type) {
-  if (!toastEl || !toastText || !toastIcon) return;
-  toastText.innerText = text;
-  toastIcon.className = `w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg ${
-    type === "green" ? "bg-[#34A853]" : type === "red" ? "bg-[#EA4335]" : "bg-[#4285F4]"
-  }`;
-  toastIcon.innerHTML = `<i class="fas fa-${
-    type === "green" ? "check" : type === "red" ? "exclamation" : "info"
-  }"></i>`;
-  // 从顶部滑入；收回时用 toast-retracted 完全移出视口，避免残留
-  toastEl.classList.remove("toast-retracted");
-  toastEl.classList.remove("-translate-y-full");
-  toastEl.classList.add("translate-y-0");
-  const t = setTimeout(() => {
-    toastEl.classList.remove("translate-y-0");
-    toastEl.classList.add("-translate-y-full");
-    toastEl.ontransitionend = () => {
-      toastEl.classList.add("toast-retracted");
-      toastEl.ontransitionend = null;
-    };
-  }, 3000);
-  if (toastEl._toastTimer) clearTimeout(toastEl._toastTimer);
-  toastEl._toastTimer = t;
-}
-if (typeof window !== "undefined") window.showToast = showToast;
-
 function addMsg(role, text) {
   const div = document.createElement("div");
   div.className = `flex ${
@@ -257,57 +211,6 @@ function addFilePackMsg(filename) {
   `;
   chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
-}
-
-async function apiJson(path, options = {}) {
-  let res;
-  try {
-    res = await fetch(`${API_BASE}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
-  } catch (e) {
-    throw new Error("NETWORK: 无法连接后端，请确认已执行 uvicorn backend.main:app --reload");
-  }
-  if (!res.ok) {
-    const text = await res.text();
-    let detail = text;
-    try {
-      const j = JSON.parse(text);
-      detail = j.detail || (typeof j.detail === "string" ? j.detail : text);
-    } catch (_) {}
-    throw new Error(`API ${res.status}: ${detail}`);
-  }
-  return res.json();
-}
-
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result;
-      const base64 = dataUrl.indexOf(",") >= 0 ? dataUrl.split(",")[1] : dataUrl;
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-/** 把文件用 Base64 发到 /api/parse-document，拿回 { text } */
-async function uploadAndParseDocument(file) {
-  const content_base64 = await readFileAsBase64(file);
-  const res = await fetch(`${API_BASE}/api/parse-document`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: file.name, content_base64 }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    const detail = err.detail || res.statusText;
-    throw new Error(detail);
-  }
-  return res.json();
 }
 
 /**
@@ -438,32 +341,7 @@ async function switchView() {
   });
 }
 
-// 脑图渲染：根在中心，子节点按子树权重分配角度，避免重叠
-const LAYOUT = {
-  centerX: 2000,
-  centerY: 2000,
-  radiusLevel1: 420,
-  radiusStep: 380,
-  // 6 个方向：上、右上、右下、下、左下、左上（度），子节点多于 6 时均匀分 360°
-  directions: [270, 330, 30, 90, 150, 210],
-  nodeWidthRoot: 260,
-  nodeWidth: 200,
-  nodeWidthSection: 220,
-  nodeHeight: 80,
-  perpGap: 130,
-  // 每层最小扇形角度（度），保证兄弟节点不重叠
-  minFanAnglePerChild: 28,
-  maxFanAngleTotal: 140,
-};
-
-// ————— 连线形态系统（独立于节点临时推断） —————
-// 四种形态：粗直线、细直线、弯曲细线、弯曲粗线；可选虚线（Tips 附属）
-const CONNECTOR_MORPHOLOGY = {
-  THICK_STRAIGHT: "thick_straight",   // 粗的直线：主脉
-  THIN_STRAIGHT: "thin_straight",     // 细的直线
-  THIN_CURVED: "thin_curved",         // 弯曲的细线
-  THICK_CURVED: "thick_curved",       // 弯曲的粗线
-};
+// 连线形态与布局常量见 config.js（LAYOUT, CONNECTOR_MORPHOLOGY）
 
 /**
  * 根据父子节点与整树结构，唯一确定一条连线的状态（形态 + 是否虚线）。
@@ -1011,17 +889,45 @@ const SUPER_AGENT_BATCH_SIZE = 2;   // 每轮更新 2 个节点（减轻单点 4
 const SUPER_AGENT_MAX_DEPTH = 4;
 const SUPER_AGENT_READ_MS = 400;    // 爆发弹窗短暂停留
 
-// 单节点：仅用 AI 输出（建议回答或 Tips），无则跳过该节点，不提交非 AI 文案
+// 超级 Agent：拉取节点网页搜索摘要（若有），用于注入 suggest/tips 上下文
+async function fetchWebSnippetsForNode(nodeId) {
+  const results = [];
+  try {
+    const res = await apiJson(
+      `/api/projects/${state.projectId}/nodes/${nodeId}/web-search`,
+      { method: "POST" },
+    );
+    const list = res.results || [];
+    for (let i = 0; i < Math.min(2, list.length); i++) {
+      const r = list[i];
+      const snippet = (r.snippet || "").trim() || (r.title || "").trim();
+      if (snippet) results.push(snippet.slice(0, 600));
+    }
+  } catch (_) {}
+  return results;
+}
+
+// 单节点：可选网页搜索 → suggest（+ web_snippets）→ 空则 tips/candidates → 都空则跳过；有则提交回答后 spawn(allow_fallback=false)，无追问则跳过
 async function processOneRedNode(node) {
   const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
+  const webSnippets = await fetchWebSnippetsForNode(node.id);
+  const suggestBody = webSnippets.length ? { web_snippets: webSnippets } : undefined;
+  const tipsBody = webSnippets.length ? { web_snippets: webSnippets } : undefined;
+
   let answerContent = "";
   try {
-    const suggestRes = await apiJson(`${base}/answer/suggest`, { method: "POST" });
+    const suggestRes = await apiJson(`${base}/answer/suggest`, {
+      method: "POST",
+      body: suggestBody ? JSON.stringify(suggestBody) : undefined,
+    });
     answerContent = (suggestRes.content && String(suggestRes.content).trim()) || "";
   } catch (_) {}
   if (!answerContent) {
     try {
-      const candRes = await apiJson(`${base}/tips/candidates`, { method: "POST" });
+      const candRes = await apiJson(`${base}/tips/candidates`, {
+        method: "POST",
+        body: tipsBody ? JSON.stringify(tipsBody) : undefined,
+      });
       const cands = candRes.candidates || [];
       answerContent = (cands[0] && String(cands[0]).trim()) || "";
     } catch (_) {}
@@ -1033,28 +939,52 @@ async function processOneRedNode(node) {
     method: "POST",
     body: JSON.stringify({ content: answerContent, by_ai: true }),
   });
-  const newNode = await apiJson(`${base}/spawn`, { method: "POST" });
-  return { node, newNode, ok: true };
+  try {
+    const newNode = await apiJson(`${base}/spawn?allow_fallback=false`, { method: "POST" });
+    return { node, newNode, ok: true, webSnippetsCount: webSnippets.length };
+  } catch (e) {
+    if (e && (e.message || "").toString().includes("no_followup")) {
+      throw new Error("no_followup");
+    }
+    throw e;
+  }
 }
 
-// 仅从已答节点生成追问（100% 时用，不提交回答；与常规一致，仅用模型返回的专业追问）
+// 仅从已答节点生成追问（100% 时用，不提交回答）；超级 Agent 内不兜底，无追问则跳过
 async function spawnFromAnsweredNode(node) {
   const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
-  await apiJson(`${base}/spawn`, { method: "POST" });
-  return { node, ok: true };
+  try {
+    await apiJson(`${base}/spawn?allow_fallback=false`, { method: "POST" });
+    return { node, ok: true };
+  } catch (e) {
+    if (e && (e.message || "").toString().includes("no_followup")) {
+      throw new Error("no_followup");
+    }
+    throw e;
+  }
 }
 
-// 收敛阶段：仅用 AI 输出，无则跳过该节点
+// 收敛阶段：可选网页搜索 → suggest/tips（带 web_snippets），无则跳过
 async function processOneRedNodeConverge(node) {
   const base = `/api/projects/${state.projectId}/nodes/${node.id}`;
+  const webSnippets = await fetchWebSnippetsForNode(node.id);
+  const suggestBody = webSnippets.length ? { web_snippets: webSnippets } : undefined;
+  const tipsBody = webSnippets.length ? { web_snippets: webSnippets } : undefined;
+
   let answerContent = "";
   try {
-    const suggestRes = await apiJson(`${base}/answer/suggest`, { method: "POST" });
+    const suggestRes = await apiJson(`${base}/answer/suggest`, {
+      method: "POST",
+      body: suggestBody ? JSON.stringify(suggestBody) : undefined,
+    });
     answerContent = (suggestRes.content && String(suggestRes.content).trim()) || "";
   } catch (_) {}
   if (!answerContent) {
     try {
-      const candRes = await apiJson(`${base}/tips/candidates`, { method: "POST" });
+      const candRes = await apiJson(`${base}/tips/candidates`, {
+        method: "POST",
+        body: tipsBody ? JSON.stringify(tipsBody) : undefined,
+      });
       const cands = candRes.candidates || [];
       answerContent = (cands[0] && String(cands[0]).trim()) || "";
     } catch (_) {}
@@ -1120,8 +1050,12 @@ async function runSuperAgent() {
           showBurst(1, "追加追问", "当前已 100%，从根节点往外尝试生成追问以多创造分支\n仅当模型返回专业追问时新增");
           const spawnResults = await Promise.allSettled(spawnBatch.map((n) => spawnFromAnsweredNode(n)));
           const spawnOk = spawnResults.filter((r) => r.status === "fulfilled" && r.value && r.value.ok).length;
+          const spawnNoFollowup = spawnResults.filter((r) => r.status === "rejected" && r.reason && (r.reason.message || "").includes("no_followup")).length;
           totalExpanded += spawnOk;
           if (spawnOk > 0) consecutive100Rounds = 0;
+          if (spawnNoFollowup > 0) {
+            showToast(`本批 ${spawnNoFollowup} 次从根追问未产生新问题已跳过`, "blue");
+          }
           const project = await apiJson(`/api/projects/${state.projectId}`);
           state.nodes = project.nodes || state.nodes;
           state.contextLinks = project.context_links || state.contextLinks;
@@ -1170,8 +1104,14 @@ async function runSuperAgent() {
         return `${i + 1}. ${q.slice(0, 52)}${q.length > 52 ? "…" : ""}`;
       });
       const batchDetail = `本批共 ${batch.length} 个节点，同时执行：\n\n${batchDetailLines.join("\n")}`;
-      const stepDetail = "每节点流程：\n· 拉取参考答案候选\n· 取首条提交为 AI 回答\n· 在该节点下生成追问子节点";
-      const roundDetail = `第 ${round + 1} / ${SUPER_AGENT_MAX_ROUNDS} 轮展开\n本批处理 ${batch.length} 个红点\n累计已新增 ${totalExpanded} 个节点`;
+      const contextLinksCount = (state.contextLinks || []).length;
+      const stepDetail = [
+        "每节点流程（已启用）：",
+        "· 网页搜索：按问题搜相关网页，摘要注入回答（需配置 SEARCH_API_KEY）",
+        "· 上下文连线：与当前节点连线的材料/节点内容由后端自动注入",
+        "· 拉取参考答案 → 提交 AI 回答 → 生成追问子节点",
+      ].join("\n");
+      const roundDetail = `第 ${round + 1} / ${SUPER_AGENT_MAX_ROUNDS} 轮展开\n本批处理 ${batch.length} 个红点\n累计已新增 ${totalExpanded} 个节点${contextLinksCount > 0 ? `\n当前项目共 ${contextLinksCount} 条上下文连线将参与回答` : ""}`;
 
       showBurst(1, "并发展开", batchDetail);
       showBurst(2, "本批问题", batchDetailLines.join("\n"));
@@ -1184,11 +1124,23 @@ async function runSuperAgent() {
       );
       const ok = results.filter((r) => r.status === "fulfilled" && r.value && r.value.ok).length;
       totalExpanded += ok;
+      const totalWebSnippets = results
+        .filter((r) => r.status === "fulfilled" && r.value && r.value.webSnippetsCount != null)
+        .reduce((sum, r) => sum + (r.value.webSnippetsCount || 0), 0);
+      if (round === 0 && totalWebSnippets === 0 && batch.length > 0) {
+        showToast("提示：在 .env 中配置 SEARCH_API_KEY（如 Serper）可让超级 Agent 使用网页搜索增强回答", "blue");
+      } else if (totalWebSnippets > 0) {
+        showToast(`本批已使用网页搜索：共注入 ${totalWebSnippets} 条摘要参与回答`, "green");
+      }
       const noAi = results.filter((r) => r.status === "rejected" && r.reason && (r.reason.message || "").includes("no_ai_answer")).length;
+      const noFollowup = results.filter((r) => r.status === "rejected" && r.reason && (r.reason.message || "").includes("no_followup")).length;
       if (noAi > 0) {
         showToast(`本批 ${noAi} 个节点未获取到 AI 回答（建议回答与 Tips 均为空）已跳过，请检查是否已配置 API 或网络`, "blue");
       }
-      if (results.some((r) => r.status === "rejected" && (!r.reason || !(r.reason.message || "").includes("no_ai_answer")))) {
+      if (noFollowup > 0) {
+        showToast(`本批 ${noFollowup} 个节点未产生新追问已跳过（仅保留有质量回答）`, "blue");
+      }
+      if (results.some((r) => r.status === "rejected" && (!r.reason || !(r.reason.message || "").includes("no_ai_answer") && !(r.reason.message || "").includes("no_followup")))) {
         console.warn("super agent batch partial fail:", results.map((r) => (r.status === "rejected" ? r.reason : null)));
       }
 
@@ -1207,7 +1159,10 @@ async function runSuperAgent() {
         const secLeft = Math.max(0, Math.round(remainingRoundsAfter * avgPerRound));
         etaStrAfter = secLeft > 0 ? `预计约 ${secLeft} 秒后完成收敛` : "即将完成收敛";
       }
-      updateCenterOverlay(progressDone, etaStrAfter, `本批完成：${ok}/${batch.length} 个 · 累计新节点 ${totalExpanded}`);
+      const detailLine = totalWebSnippets > 0
+        ? `本批完成：${ok}/${batch.length} 个 · 累计新节点 ${totalExpanded} · 已注入 ${totalWebSnippets} 条网页摘要`
+        : `本批完成：${ok}/${batch.length} 个 · 累计新节点 ${totalExpanded}`;
+      updateCenterOverlay(progressDone, etaStrAfter, detailLine);
 
       const failCount = batch.length - ok;
       updateBurst(1, "本轮完成", `成功 ${ok} 个，${failCount ? `失败 ${failCount} 个` : "全部成功"}\n\n新生成的追问子节点已挂载到对应父节点下，可在导图中查看。`);
@@ -1327,8 +1282,8 @@ async function triggerSpawnFromNode(nodeId) {
   } catch (e) {
     console.error(e);
     let msg = e && e.message ? e.message : "生成新问题失败";
-    if (msg.includes("no_answer")) msg = "请先回答该节点后再点击加号生成新问题";
-    if (msg.includes("no_followup")) msg = "当前节点暂无合适追问（质量优先），可稍后重试或手动输入问题";
+    if (msg.includes("no_answer")) msg = "请先回答该节点后再追问。";
+    if (msg.includes("no_followup")) msg = "追问生成失败（可能为接口暂时异常），请稍后重试。";
     showToast(msg, "red");
   }
 }
@@ -1648,7 +1603,21 @@ async function applyTipAsAnswer(nodeId, content) {
   }
 }
 
-// 熵增·网页：按节点搜最相关例子
+// 右侧网页搜索面板：显示 / 关闭
+function showWebSearchPanel() {
+  if (!webSearchPanel) return;
+  webSearchPanel.classList.remove("opacity-0", "pointer-events-none", "translate-x-4");
+  webSearchPanel.classList.add("pointer-events-auto");
+  webSearchPanel.setAttribute("aria-hidden", "false");
+}
+function closeWebSearchPanel() {
+  if (!webSearchPanel) return;
+  webSearchPanel.classList.add("opacity-0", "pointer-events-none", "translate-x-4");
+  webSearchPanel.classList.remove("pointer-events-auto");
+  webSearchPanel.setAttribute("aria-hidden", "true");
+}
+
+// 熵增·网页：按节点搜最相关例子；在右侧面板展示（一句话介绍 + 2～3 条网站选择 + 导入并链接）
 async function triggerWebSearchForNode(nodeId) {
   if (!state.projectId) return;
   closeNodeContextMenu();
@@ -1659,24 +1628,78 @@ async function triggerWebSearchForNode(nodeId) {
     );
     const results = res.results || [];
     if (!results.length) {
-      showToast("未搜到相关网页（可配置 SEARCH_API_KEY 如 Serper）", "blue");
+      showToast(res.hint || "未搜到相关网页", "blue");
       return;
     }
-    const lines = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${(r.snippet || "").slice(0, 80)}…`);
-    if (questionFloatTitle) questionFloatTitle.textContent = "相关网页";
-    if (questionFloatText) questionFloatText.textContent = lines.join("\n\n");
-    if (questionFloat) {
-      questionFloat.classList.remove("opacity-0", "translate-y-2", "pointer-events-none");
-      questionFloat.classList.add("pointer-events-auto");
-      if (questionFloatCard) {
-        questionFloatCard.classList.remove("pointer-events-none");
-        questionFloatCard.classList.add("pointer-events-auto");
-      }
+    state.webSearchForNodeId = nodeId;
+    const node = state.nodes.find((n) => n.id === nodeId);
+    const questionText = (node && (node.question || node.title || "").trim()) || "当前问题";
+    const introText = `针对「${questionText.slice(0, 28)}${questionText.length > 28 ? "…" : ""}」可参考以下网站，点击任意一项即创建网站节点并链接到本节点。`;
+    if (webSearchPanelIntro) webSearchPanelIntro.textContent = introText;
+    if (webSearchPanelList) {
+      webSearchPanelList.innerHTML = "";
+      const showResults = results.slice(0, 3);
+      showResults.forEach((r, i) => {
+        const card = document.createElement("div");
+        card.setAttribute("data-web-search-url", r.url || "");
+        card.setAttribute("data-web-search-title", (r.title || "").slice(0, 200));
+        card.setAttribute("role", "button");
+        card.setAttribute("tabindex", "0");
+        card.className = "px-4 py-3 rounded-2xl bg-white/95 border border-purple-200/80 text-gray-900 flex flex-col gap-2 min-w-0 overflow-hidden cursor-pointer hover:bg-white hover:border-purple-300 hover:shadow-lg transition-all duration-200";
+        const title = document.createElement("div");
+        title.className = "font-semibold text-purple-800 text-sm break-words";
+        title.textContent = (r.title || "").trim() || `网站 ${i + 1}`;
+        const snippet = document.createElement("div");
+        snippet.className = "text-xs text-gray-600 leading-relaxed line-clamp-3 break-words overflow-hidden min-w-0";
+        const rawSnippet = (r.snippet || "").trim();
+        snippet.textContent = rawSnippet.slice(0, 200) + (rawSnippet.length > 200 ? "…" : "");
+        card.appendChild(title);
+        card.appendChild(snippet);
+        webSearchPanelList.appendChild(card);
+      });
     }
-    showToast(`已找到 ${results.length} 条相关网页`, "blue");
+    showWebSearchPanel();
+    showToast(`已找到相关网站，点击任意一项即可创建并链接`, "blue");
   } catch (e) {
     console.error(e);
     showToast(e && e.message ? e.message : "搜索失败", "red");
+  }
+}
+
+// 网页搜索结果浮层内点击「作为材料导入并链接到本节点」时调用
+async function importWebSearchResultAsMaterialAndLink(url, title, currentNodeId) {
+  if (!state.projectId || !currentNodeId || !url) return;
+  try {
+    const material = await apiJson(`/api/projects/${state.projectId}/materials`, {
+      method: "POST",
+      body: JSON.stringify({ url: url.trim(), title: (title || "").trim() || undefined }),
+    });
+    await apiJson(`/api/projects/${state.projectId}/context-links`, {
+      method: "POST",
+      body: JSON.stringify({ node_a_id: currentNodeId, node_b_id: material.id }),
+    });
+    const project = await apiJson(`/api/projects/${state.projectId}`);
+    state.nodes = project.nodes || state.nodes;
+    state.contextLinks = project.context_links || state.contextLinks;
+    // 将新材料节点放在当前操作节点右侧附近，便于看到连线
+    const curPos = state.nodePositions[currentNodeId];
+    const materialW = 180;
+    const gap = 50;
+    if (curPos && typeof curPos.left === "number" && typeof curPos.top === "number") {
+      const curW = curPos.width || LAYOUT.nodeWidth;
+      state.nodePositions[material.id] = {
+        left: curPos.left + curW + gap,
+        top: curPos.top,
+        width: materialW,
+      };
+    }
+    buildMap();
+    updateConnectors();
+    closeWebSearchPanel();
+    showToast("已导入为材料节点并链接到本节点，回答时将参考该网页内容", "green");
+  } catch (e) {
+    console.error(e);
+    showToast(e && e.message ? e.message : "导入或链接失败", "red");
   }
 }
 
@@ -2034,6 +2057,9 @@ window.addEventListener("click", (e) => {
   if (blankContextMenu && !blankContextMenu.classList.contains("hidden") && (!e.target.closest || !e.target.closest("#blank-context-menu"))) {
     closeBlankContextMenu();
   }
+  if (webSearchPanel && !webSearchPanel.classList.contains("pointer-events-none") && (!e.target.closest || !e.target.closest("#web-search-panel"))) {
+    closeWebSearchPanel();
+  }
 });
 
 // 绑定右键菜单按钮点击（委托，支持动态添加的「链接材料」）
@@ -2046,6 +2072,34 @@ if (contextMenu) {
     if (action === "link-material") state.contextMenu.materialId = btn.getAttribute("data-material-id");
     if (action) handleContextMenuClick(action);
   });
+}
+
+// 右侧网页搜索面板：点击整张卡片即创建节点并链接 + 关闭按钮
+if (webSearchPanel) {
+  webSearchPanel.addEventListener("click", (e) => {
+    if (e.target.id === "web-search-panel-close" || e.target.closest("#web-search-panel-close")) {
+      closeWebSearchPanel();
+      return;
+    }
+    const card = e.target.closest("[data-web-search-url]");
+    if (!card || !state.webSearchForNodeId) return;
+    e.stopPropagation();
+    const url = card.getAttribute("data-web-search-url");
+    const title = card.getAttribute("data-web-search-title") || "";
+    if (url) importWebSearchResultAsMaterialAndLink(url, title, state.webSearchForNodeId);
+  });
+  webSearchPanel.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest("[data-web-search-url]");
+    if (!card || !state.webSearchForNodeId) return;
+    e.preventDefault();
+    const url = card.getAttribute("data-web-search-url");
+    const title = card.getAttribute("data-web-search-title") || "";
+    if (url) importWebSearchResultAsMaterialAndLink(url, title, state.webSearchForNodeId);
+  });
+}
+if (webSearchPanelClose) {
+  webSearchPanelClose.addEventListener("click", () => closeWebSearchPanel());
 }
 
 // 空白右键·导入材料
@@ -2082,9 +2136,6 @@ document.getElementById("blank-menu-import-material")?.addEventListener("click",
     showToast(e && e.message ? e.message : "导入失败", "red");
   }
 });
-
-const CANVAS_SCALE_MIN = 0.25;
-const CANVAS_SCALE_MAX = 3;
 
 function syncCanvas() {
   const s = state.canvas.scale;
@@ -2315,9 +2366,8 @@ if (superAgentExitBtn) superAgentExitBtn.addEventListener("click", () => {
   showToast("正在退出托管…", "blue");
 });
 
-// 文档拖拽上传
+// 文档拖拽上传（ALLOWED_DOC_TYPES 见 config.js）
 
-const ALLOWED_DOC_TYPES = [".txt", ".pdf", ".docx"];
 function isAllowedFile(file) {
   const name = (file.name || "").toLowerCase();
   return ALLOWED_DOC_TYPES.some((ext) => name.endsWith(ext));

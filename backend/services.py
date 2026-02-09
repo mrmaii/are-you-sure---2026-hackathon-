@@ -480,9 +480,13 @@ async def spawn_followup_node(
   project_id: str,
   node_id: str,
   ai_client: Optional[AIClient] = None,
+  *,
+  allow_fallback: bool = True,
 ) -> Node:
   """
-  基于“已回答过的节点”生成追问子节点。始终仅用模型返回的专业追问，无兜底（含 100% 后追加）。
+  基于“已回答过的节点”生成追问子节点。
+  allow_fallback=True（如手动操作）：无追问时用兜底文案创建子节点。
+  allow_fallback=False（如超级 Agent）：无追问时直接 raise ValueError("no_followup")，不创建节点，保证产出质量。
   """
   ai_client = ai_client or AIClient()
 
@@ -514,9 +518,16 @@ async def spawn_followup_node(
     followups = []
   followups = [str(q)[:200] for q in followups if str(q).strip()]
   if not followups:
-    raise ValueError("no_followup")
-
-  q = followups[0]
+    if not allow_fallback:
+      raise ValueError("no_followup")
+    # 模型未返回追问时用兜底追问（仅手动操作等场景），避免 400
+    logger.info(
+      "spawn_followup: AI returned no followups, using fallback (project=%s node=%s)",
+      project_id, node_id,
+    )
+    q = "请进一步说明或补充相关细节。"
+  else:
+    q = followups[0]
 
   children = [n for n in nodes if n.parent_id == node.id]
   base_order = max([n.order_index for n in children], default=0)
