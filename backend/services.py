@@ -1,0 +1,726 @@
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from typing import List, Optional, Tuple
+from uuid import uuid4
+
+from sqlmodel import Session, select
+
+from .ai_client import AIClient
+from .models import ContextLink, Draft, Node, NodeAnswer, Project, ProjectDialog
+from .skills import (
+  get_skill_content,
+  get_supervisor_content,
+  HACKATHON_SECTIONS,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _uuid() -> str:
+  return uuid4().hex
+
+
+def _short_title(text: str, fallback: str) -> str:
+  """从问题里截 2～5 字当节点标题。"""
+  t = (text or "").strip()[:5].strip()
+  return t if t else fallback
+
+
+def flatten_nodes(nodes: List[Node], parent_id: Optional[str] = None) -> List[Node]:
+  tree: List[Node] = []
+  children = [n for n in nodes if n.parent_id == parent_id]
+  if parent_id is None:
+    children = [n for n in children if getattr(n, "node_type", "question") != "material"]
+  children.sort(key=lambda n: n.order_index)
+  for c in children:
+    tree.append(c)
+    tree.extend(flatten_nodes(nodes, c.id))
+  return tree
+
+
+def calc_progress(all_nodes: List[Node]) -> Tuple[int, int, int]:
+  # 只算普通问题节点，Tips 和根节点不算
+  questions = [
+    n
+    for n in all_nodes
+    if getattr(n, "node_type", "question") not in ("tip", "section", "material")
+    and getattr(n, "level", 0) > 0
+  ]
+  total = len(questions)
+  green = len([n for n in questions if n.status in ("green", "ai")])
+  percent = int(round((green / total) * 100)) if total else 0
+  return total, green, percent
+
+
+# Draft 立项对话
+
+
+def _mode_limits(mode: str) -> Tuple[int, int]:
+  """按模式给问题数和深度上限（现在主要靠脑图里手动追问）。"""
+  m = (mode or "detail").lower()
+  if m == "brief":
+    return 10, 2
+  if m == "deep":
+    return 40, 4
+  return 20, 3
+
+
+def create_draft(session: Session, mode: str = "detail") -> Draft:
+  max_q, _ = _mode_limits(mode)
+  draft = Draft(
+    id=_uuid(),
+    messages="[]",
+    status="chatting",
+    mode=(mode or "detail"),
+    max_questions=max_q,
+    current_questions=0,
+  )
+  session.add(draft)
+  session.commit()
+  session.refresh(draft)
+  return draft
+
+
+async def draft_append_message(
+  session: Session,
+  draft_id: str,
+  user_content: str,
+  ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
+) -> Tuple[bool, str, Optional[str], Optional[List[str]]]:
+  """把用户这条消息塞进对话，调 AI 分析；返回要不要继续问、回复文案、标题、初题。"""
+  draft = session.get(Draft, draft_id)
+  if not draft:
+    raise ValueError("draft_not_found")
+  if draft.status == "ready":
+    raise ValueError("draft_already_ready")
+
+  ai_client = ai_client or AIClient()
+  messages = json.loads(draft.messages) if draft.messages else []
+  messages.append({"role": "user", "content": user_content.strip()})
+  skill_content = get_skill_content(skill_id)
+
+  result = await ai_client.draft_analyze_and_reply(messages, skill_content=skill_content)
+  reply = result.get("reply", "")
+  need_more = result.get("need_more", True)
+  title = result.get("title")
+  initial_questions = result.get("initial_questions") or []
+
+  messages.append({"role": "assistant", "content": reply})
+  draft.messages = json.dumps(messages, ensure_ascii=False)
+  if not need_more and title:
+    draft.status = "ready"
+    draft.project_title = title
+    draft.initial_questions = json.dumps(initial_questions, ensure_ascii=False)
+  draft.updated_at = datetime.utcnow()
+  session.add(draft)
+  session.commit()
+  return need_more, reply, title, initial_questions
+
+
+async def create_project_from_draft(
+  session: Session,
+  draft_id: str,
+  ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
+) -> Project:
+  """Draft 聊清楚后建项目：根节点 + 用「脑图出题」提示词生成 2～3 个初题。"""
+  draft = session.get(Draft, draft_id)
+  if not draft:
+    raise ValueError("draft_not_found")
+  if draft.status != "ready" or not draft.project_title:
+    raise ValueError("draft_not_ready")
+
+  messages = json.loads(draft.messages) if draft.messages else []
+  idea_parts = [m.get("content", "") for m in messages if m.get("role") == "user"]
+  idea_text = "\n".join(idea_parts).strip() or draft.project_title
+
+  max_q, _ = _mode_limits(draft.mode)
+
+  project = Project(
+    id=_uuid(),
+    name=draft.project_title,
+    idea_text=idea_text,
+    status="in_progress",
+    mode=draft.mode or "detail",
+    max_questions=max_q,
+    current_questions=0,
+    skill_id=skill_id,
+  )
+  session.add(project)
+  session.flush()
+
+  for role, text in [(m.get("role"), m.get("content", "")) for m in messages]:
+    if role in ("user", "assistant", "system"):
+      session.add(ProjectDialog(project_id=project.id, role=role, content=text))
+
+  # 黑客松版本：中心项目（芯片）+ 6 个文件夹板块（主题）+ 每板块下 1～2 个问题
+  client = ai_client or AIClient()
+  supervisor = get_supervisor_content()
+  partition_preview = "\n".join([f"- {t[1]}" for t in HACKATHON_SECTIONS])
+  skill_content = (supervisor + "\n\n分区方向：\n" + partition_preview).strip()[:6000]
+  section_items = await client.generate_hackathon_section_questions(
+    idea_text, draft.project_title, skill_content=skill_content
+  )
+  if len(section_items) < 6:
+    for i in range(len(section_items), 6):
+      sid, theme = HACKATHON_SECTIONS[i]
+      section_items.append({"section": sid, "theme": theme, "questions": [f"请说明本项目的{theme}。"]})
+
+  root_id = _uuid()
+  root = Node(
+    id=root_id,
+    project_id=project.id,
+    parent_id=None,
+    level=0,
+    title=draft.project_title,
+    question="项目根节点",
+    status="red",
+    order_index=0,
+  )
+  session.add(root)
+  session.flush()
+
+  total_questions = 0
+  for idx, item in enumerate(section_items[:6]):
+    sid = str(item.get("section") or HACKATHON_SECTIONS[idx][0])
+    theme = str(item.get("theme") or HACKATHON_SECTIONS[idx][1])
+    questions = item.get("questions") or [f"请说明{theme}。"]
+    if not isinstance(questions, list):
+      questions = [str(questions)[:200]]
+    questions = [str(q)[:200].strip() for q in questions[:2] if str(q).strip()]
+    if not questions:
+      questions = [f"请说明{theme}。"]
+
+    # 一级：文件夹板块（仅展示主题，不参与进度）
+    folder_id = _uuid()
+    session.add(
+      Node(
+        id=folder_id,
+        project_id=project.id,
+        parent_id=root_id,
+        level=1,
+        title=theme[:50],
+        question="本板块",
+        status="red",
+        order_index=idx + 1,
+        skill_id=sid,
+        node_type="section",
+      )
+    )
+
+    # 二级：该路径下 1～2 个问题
+    for qidx, q in enumerate(questions):
+      total_questions += 1
+      session.add(
+        Node(
+          id=_uuid(),
+          project_id=project.id,
+          parent_id=folder_id,
+          level=2,
+          title=_short_title(q, f"问{qidx + 1}"),
+          question=q[:200],
+          status="red",
+          order_index=qidx + 1,
+          skill_id=sid,
+        )
+      )
+
+  project.current_questions = total_questions
+  session.add(project)
+
+  session.commit()
+  session.refresh(project)
+  return project
+
+
+async def create_project_from_idea(
+  session: Session,
+  idea_text: str,
+  dialog: List[Tuple[str, str]],
+  ai_client: Optional[AIClient] = None,
+  skill_id: Optional[str] = None,
+) -> Project:
+  ai_client = ai_client or AIClient()
+
+  # 提取项目名
+  cleaned = idea_text.strip() or "未命名项目"
+  max_len = 24
+  name = cleaned[:max_len] + ("..." if len(cleaned) > max_len else "")
+
+  project = Project(
+    id=_uuid(),
+    name=name,
+    idea_text=idea_text,
+    skill_id=skill_id,
+  )
+  session.add(project)
+  session.flush()
+
+  for role, text in dialog:
+    session.add(
+      ProjectDialog(
+        project_id=project.id,
+        role=role,
+        content=text,
+      )
+    )
+
+  skill_content = get_skill_content(skill_id)
+  try:
+    drafts = await ai_client.generate_mindmap(idea_text, skill_content=skill_content)
+  except Exception as e:
+    logger.warning("AI generate_mindmap failed, using stub: %s", e)
+    drafts = ai_client._generate_stub_mindmap(idea_text)
+
+  # 将 drafts 转为 Node，并维护 parent_id
+  nodes: List[Node] = []
+  for idx, d in enumerate(drafts):
+    node_id = _uuid()
+    parent_id: Optional[str] = None
+    if d.parent_index is not None:
+      parent_id = nodes[d.parent_index].id
+    node = Node(
+      id=node_id,
+      project_id=project.id,
+      parent_id=parent_id,
+      level=d.level,
+      title=d.title,
+      question=d.question,
+      status="red",
+      order_index=idx,
+    )
+    nodes.append(node)
+    session.add(node)
+
+  session.commit()
+  session.refresh(project)
+  return project
+
+
+def get_project_with_nodes(session: Session, project_id: str) -> Tuple[Project, List[Node]]:
+  project = session.get(Project, project_id)
+  if not project:
+    raise ValueError("project_not_found")
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  return project, nodes
+
+
+def _resolve_node_skill_id(
+  session: Session, project_id: str, node_id: str, nodes: Optional[List[Node]] = None
+) -> Optional[str]:
+  """从节点自身或父链或项目解析出该节点应使用的 skill_id。"""
+  node_map: dict = {}
+  if nodes is not None:
+    node_map = {n.id: n for n in nodes}
+  else:
+    nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+    node_map = {n.id: n for n in nodes}
+  node = node_map.get(node_id)
+  if not node:
+    return None
+  if getattr(node, "skill_id", None) and str(node.skill_id).strip():
+    return str(node.skill_id).strip()
+  if node.parent_id:
+    return _resolve_node_skill_id(session, project_id, node.parent_id, nodes)
+  project = session.get(Project, project_id)
+  return getattr(project, "skill_id", None) or None
+
+
+def get_skill_content_for_node(
+  session: Session, project_id: str, node_id: str, nodes: Optional[List[Node]] = None
+) -> str:
+  """黑客松：总监督 + 节点所属分区 Skills 合并后返回（总监督参与所有交互）。"""
+  supervisor = get_supervisor_content()
+  partition_id = _resolve_node_skill_id(session, project_id, node_id, nodes)
+  partition = get_skill_content(partition_id)
+  parts = [s for s in (supervisor.strip(), partition.strip()) if s]
+  combined = "\n\n---\n\n".join(parts)
+  return combined[:8000] if len(combined) > 8000 else combined
+
+
+def get_linked_context_for_node(
+  session: Session, project_id: str, node_id: str
+) -> str:
+  """与该节点通过「链接上下文」关联的其它节点内容（材料节点=网页正文，普通节点=最新回答），供回答/Tips 时参考。"""
+  links = session.exec(
+    select(ContextLink).where(
+      ContextLink.project_id == project_id,
+      (ContextLink.node_a_id == node_id) | (ContextLink.node_b_id == node_id),
+    )
+  ).all()
+  if not links:
+    return ""
+  parts: List[str] = []
+  for link in links:
+    other_id = link.node_b_id if link.node_a_id == node_id else link.node_a_id
+    node = session.get(Node, other_id)
+    if not node or node.project_id != project_id:
+      continue
+    title = (node.title or node.question or "关联节点")[:50]
+    if getattr(node, "node_type", "question") == "material":
+      ans = session.exec(
+        select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
+      ).first()
+      content = (ans.content if ans else node.question or "").strip()
+    else:
+      ans = session.exec(
+        select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
+      ).first()
+      content = (ans.content if ans else "").strip()
+    if content:
+      parts.append(f"【{title}】\n{content[:8000]}")
+  if not parts:
+    return ""
+  return "\n\n---\n\n".join(parts)[:12000]
+
+
+async def answer_node_and_trace(
+  session: Session,
+  project_id: str,
+  node_id: str,
+  content: str,
+  ai_client: Optional[AIClient] = None,
+  by_ai: bool = False,
+) -> Tuple[Node, List[Node], Optional[str], List[Node]]:
+  """
+  保存回答后：
+  - 问题节点本身立即标记为完成（人工回答 = green，AI 回答 = ai）；
+  - 额外在其下方生成一个“回答支点”子节点，作为后续追问 / Tips 的锚点：
+      - 人工回答生成 status=green 的 answer 节点；
+      - AI 回答生成 status=ai、node_type="tip" 的 Tips 节点。
+  返回 (node, nodes, next_node_id, added_nodes)，added_nodes 中包含新建的回答节点。
+  """
+
+  project, nodes = get_project_with_nodes(session, project_id)
+  node = session.get(Node, node_id)
+  if not node or node.project_id != project.id:
+    raise ValueError("node_not_found")
+
+  # 保存本次回答
+  answer = NodeAnswer(node_id=node.id, content=content)
+  session.add(answer)
+  session.flush()
+
+  next_node_id: Optional[str] = None
+  added_nodes: List[Node] = []
+
+  # 任意回答后立即标记为完成：人工回答 = 绿色，AI 回答 = 纯蓝
+  node.status = "ai" if by_ai else "green"
+  session.add(node)
+  session.flush()
+
+  # 在该问题节点下方生成一个“回答支点”子节点；继承当前节点的分区 skill_id
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  children = [n for n in nodes if n.parent_id == node.id]
+  base_order = max([n.order_index for n in children], default=0)
+  node_skill_id = _resolve_node_skill_id(session, project_id, node.id, nodes)
+
+  answer_node_id = _uuid()
+  if by_ai:
+    new_title = _short_title(content, "AI答")
+    answer_node = Node(
+      id=answer_node_id,
+      project_id=project.id,
+      parent_id=node.id,
+      level=node.level + 1,
+      title=new_title,
+      question=content,
+      status="ai",
+      node_type="tip",
+      order_index=base_order + 1,
+      skill_id=node_skill_id,
+    )
+  else:
+    new_title = _short_title(content, "回答")
+    answer_node = Node(
+      id=answer_node_id,
+      project_id=project.id,
+      parent_id=node.id,
+      level=node.level + 1,
+      title=new_title,
+      question=content,
+      status="green",
+      order_index=base_order + 1,
+      skill_id=node_skill_id,
+    )
+
+  session.add(answer_node)
+  added_nodes.append(answer_node)
+
+  # 重新获取节点列表，溯源下一个红色分支
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  next_node_id = _auto_trace_next_red_branch(session, nodes, node)
+
+  # 进度与项目状态更新
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  flat = flatten_nodes(nodes)
+  total, green, _ = calc_progress(flat)
+  root = next((n for n in flat if n.level == 0), None)
+  if root and root.status != "green":
+    non_root = [n for n in flat if n.level > 0]
+    if non_root and all(n.status == "green" for n in non_root):
+      root.status = "green"
+      session.add(root)
+  if total and total == green:
+    project.status = "completed"
+    session.add(project)
+
+  session.commit()
+  session.refresh(node)
+  nodes = session.exec(select(Node).where(Node.project_id == project_id)).all()
+  return node, nodes, next_node_id, added_nodes
+
+
+async def spawn_followup_node(
+  session: Session,
+  project_id: str,
+  node_id: str,
+  ai_client: Optional[AIClient] = None,
+  *,
+  allow_fallback: bool = True,
+) -> Node:
+  """
+  基于“已回答过的节点”生成追问子节点。
+  allow_fallback=True（如手动操作）：无追问时用兜底文案创建子节点。
+  allow_fallback=False（如超级 Agent）：无追问时直接 raise ValueError("no_followup")，不创建节点，保证产出质量。
+  """
+  ai_client = ai_client or AIClient()
+
+  project, nodes = get_project_with_nodes(session, project_id)
+  node = session.get(Node, node_id)
+  if not node or node.project_id != project.id:
+    raise ValueError("node_not_found")
+
+  latest_answer = session.exec(
+    select(NodeAnswer).where(NodeAnswer.node_id == node.id).order_by(NodeAnswer.created_at.desc())
+  ).first()
+  if not latest_answer:
+    raise ValueError("no_answer")
+
+  node_skill_id = _resolve_node_skill_id(session, project_id, node.id, nodes)
+  skill_content = get_skill_content_for_node(session, project_id, node.id, nodes)
+  linked = get_linked_context_for_node(session, project_id, node.id)
+  if linked:
+    skill_content = (skill_content or "") + "\n\n关联上下文（供参考）：\n" + linked
+  result = await ai_client.node_answer_judge_and_followups(
+    project.idea_text,
+    node.question,
+    latest_answer.content,
+    node.level,
+    skill_content=skill_content,
+  )
+  followups = result.get("followup_questions") or []
+  if not isinstance(followups, list):
+    followups = []
+  followups = [str(q)[:200] for q in followups if str(q).strip()]
+  if not followups:
+    if not allow_fallback:
+      raise ValueError("no_followup")
+    # 模型未返回追问时用兜底追问（仅手动操作等场景），避免 400
+    logger.info(
+      "spawn_followup: AI returned no followups, using fallback (project=%s node=%s)",
+      project_id, node_id,
+    )
+    q = "请进一步说明或补充相关细节。"
+  else:
+    q = followups[0]
+
+  children = [n for n in nodes if n.parent_id == node.id]
+  base_order = max([n.order_index for n in children], default=0)
+
+  new_id = _uuid()
+  new_node = Node(
+    id=new_id,
+    project_id=project.id,
+    parent_id=node.id,
+    level=node.level + 1,
+    title=_short_title(q, "新问"),
+    question=q,
+    status="red",
+    order_index=base_order + 1,
+    skill_id=node_skill_id,
+  )
+  session.add(new_node)
+
+  # 注意：父节点保持其当前完成状态（green/ai），不再因为新增追问而重新变红
+
+  session.commit()
+  session.refresh(new_node)
+  return new_node
+
+
+async def spawn_section_question(
+  session: Session,
+  project_id: str,
+  section_node_id: str,
+  ai_client: Optional[AIClient] = None,
+) -> Node:
+  """
+  黑客松：在「文件夹」板块节点下生成一个由该板块 Skills 指导的新问题（仅追问，无需先作答）。
+  """
+  client = ai_client or AIClient()
+  project, nodes = get_project_with_nodes(session, project_id)
+  node = session.get(Node, section_node_id)
+  if not node or node.project_id != project.id:
+    raise ValueError("node_not_found")
+  if getattr(node, "node_type", "question") != "section":
+    raise ValueError("not_section_node")
+
+  skill_content = get_skill_content_for_node(session, project_id, section_node_id, nodes)
+  theme = (node.title or "").strip() or "本板块"
+  question = await client.generate_one_section_question(
+    project.idea_text, project.name, theme, skill_content=skill_content
+  )
+  question = str(question).strip()[:200] or f"请说明{theme}。"
+
+  children = [n for n in nodes if n.parent_id == section_node_id]
+  base_order = max([n.order_index for n in children], default=0)
+  new_id = _uuid()
+  new_node = Node(
+    id=new_id,
+    project_id=project.id,
+    parent_id=section_node_id,
+    level=node.level + 1,
+    title=_short_title(question, "新问"),
+    question=question,
+    status="red",
+    order_index=base_order + 1,
+    skill_id=node.skill_id,
+  )
+  session.add(new_node)
+  session.commit()
+  session.refresh(new_node)
+  return new_node
+
+
+async def spawn_tips_node(
+  session: Session,
+  project_id: str,
+  node_id: str,
+  ai_client: Optional[AIClient] = None,
+) -> Node:
+  """
+  基于“已回答过的节点”，生成一个 Tips 子节点（信息节点，不需要作答）。
+  初始 question 为「信息待选择」，后续点击时再请求 AI 生成具体 Tips 选项。
+  """
+  ai_client = ai_client or AIClient()
+
+  project, nodes = get_project_with_nodes(session, project_id)
+  node = session.get(Node, node_id)
+  if not node or node.project_id != project.id:
+    raise ValueError("node_not_found")
+
+  node_skill_id = _resolve_node_skill_id(session, project_id, node.id, nodes)
+  children = [n for n in nodes if n.parent_id == node.id]
+  base_order = max([n.order_index for n in children], default=0)
+
+  q = "信息待选择"
+  new_id = _uuid()
+  new_node = Node(
+    id=new_id,
+    project_id=project.id,
+    parent_id=node.id,
+    level=node.level + 1,
+    title="信息待选择",
+    question=q,
+    status="tip",
+    order_index=base_order + 1,
+    node_type="tip",
+    skill_id=node_skill_id,
+  )
+  session.add(new_node)
+
+  session.commit()
+  session.refresh(new_node)
+  return new_node
+
+
+def create_material_node(
+  session: Session,
+  project_id: str,
+  url: str,
+  title: Optional[str] = None,
+  content: Optional[str] = None,
+) -> Node:
+  """导入网站/材料：创建 node_type=material 的节点并放置到画布；content 为抓取的网页正文，存 NodeAnswer，供关联上下文参考。"""
+  project, nodes = get_project_with_nodes(session, project_id)
+  materials = [n for n in nodes if getattr(n, "node_type", "") == "material"]
+  order_index = max([n.order_index for n in materials], default=0) + 1
+  new_id = _uuid()
+  title_str = (title or "").strip() or (url[:50] + "…" if len(url) > 50 else url)
+  new_node = Node(
+    id=new_id,
+    project_id=project.id,
+    parent_id=None,
+    level=0,
+    title=title_str,
+    question=url.strip()[:2000],
+    status="green",
+    order_index=order_index,
+    node_type="material",
+    skill_id=None,
+  )
+  session.add(new_node)
+  session.flush()
+  if content and content.strip():
+    answer = NodeAnswer(node_id=new_node.id, content=content.strip()[:50000])
+    session.add(answer)
+  session.commit()
+  session.refresh(new_node)
+  return new_node
+
+
+def _auto_trace_next_red_branch(session: Session, nodes: List[Node], leaf: Node) -> Optional[str]:
+  # 构建 id -> node 映射
+  node_map = {n.id: n for n in nodes}
+
+  cur = leaf
+  candidate_next_id: Optional[str] = None
+
+  while cur.parent_id:
+    parent = node_map.get(cur.parent_id)
+    if not parent:
+      break
+
+    # 父节点下是否还有红色兄弟分支
+    siblings = [n for n in nodes if n.parent_id == parent.id]
+    red_siblings = [s for s in siblings if s.status == "red"]
+    if red_siblings:
+      first_red_branch = red_siblings[0]
+      candidate_next_id = _find_first_red_leaf(nodes, first_red_branch.id)
+      if candidate_next_id is None:
+        candidate_next_id = first_red_branch.id
+      break
+
+    # 父节点全部子节点绿，则父节点自动变绿，继续向上
+    if siblings and all(s.status == "green" for s in siblings):
+      if parent.status != "green":
+        parent.status = "green"
+        session.add(parent)
+    cur = parent
+
+  # 根节点全绿逻辑在外层进度计算中处理
+  return candidate_next_id
+
+
+def _find_first_red_leaf(nodes: List[Node], start_id: str) -> Optional[str]:
+  node_map = {n.id: n for n in nodes}
+
+  def dfs(nid: str) -> Optional[str]:
+    n = node_map[nid]
+    children = [c for c in nodes if c.parent_id == n.id]
+    if not children and n.status == "red":
+      return n.id
+    for c in children:
+      res = dfs(c.id)
+      if res:
+        return res
+    return None
+
+  return dfs(start_id)
+
+

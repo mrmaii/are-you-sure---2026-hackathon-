@@ -1,0 +1,49 @@
+# 环境与密钥（勿提交）
+.env
+.env.local
+*.env
+
+# Python
+.venv/
+venv/
+myenv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.eggs/
+*.egg-info/
+*.egg
+
+# 数据库
+*.db
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 日志与临时
+*.log
+.cache/
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.next/
+dist/
+build/
+out/
+.pnp
+.pnp.js
+coverage/
