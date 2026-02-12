@@ -54,7 +54,8 @@ body {
 input, textarea, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
-  cursor: text !important;
+  /* 依然隐藏系统光标，只用自定义光标提示焦点 */
+  cursor: none !important;
 }
 
 /* 隐藏系统光标的元素 */
@@ -116,6 +117,7 @@ button:focus, select:focus {
   box-shadow:
     4px 4px 0 var(--slate),
     0 4px 12px rgba(0, 0, 0, 0.08);
+  /* 只做非常轻微的位移，避免“上下跳动感” */
   transform: translate(-1px, -1px);
 }
 
@@ -144,12 +146,13 @@ button:focus, select:focus {
 }
 
 .primary-btn:hover {
-  transform: translateY(-2px);
+  /* 上下微动：由 -2px 调整为 -1px，减弱“下沉/抬起”感 */
+  transform: translateY(-1px);
   box-shadow: 0 6px 0 #8a3d2d, 0 8px 16px rgba(196, 93, 56, 0.25);
 }
 
 .primary-btn:active {
-  transform: translateY(2px);
+  transform: translateY(1px);
   box-shadow: 0 2px 0 #8a3d2d;
 }
 
@@ -164,7 +167,8 @@ button:focus, select:focus {
 }
 
 .success-btn:hover {
-  transform: translateY(-2px);
+  /* 与主按钮保持同样的微动幅度 */
+  transform: translateY(-1px);
   box-shadow: 0 6px 0 #2d5a38, 0 8px 16px rgba(74, 124, 89, 0.25);
 }
 
@@ -197,7 +201,8 @@ button:focus, select:focus {
 }
 
 .node:hover {
-  transform: translateY(-3px);
+  /* 节点悬停也只做轻微上浮 */
+  transform: translateY(-1px);
 }
 
 /* 节点样式 - 实体风格 */
@@ -543,34 +548,139 @@ body:has(#sidebar.open) #sidebar-toggle {
   border: none !important;
 }
 
-/* 自定义光标 */
+/* 自定义光标：中空蓝色厚圆环 + 点击缩放 + 涟漪 */
 #custom-cursor {
   position: fixed;
   top: 0;
   left: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 0;
-  background: var(--burnt);
+  width: 33px;
+  height: 33px;
+  border-radius: 999px;
+  /* 厚环：在之前基础上再加厚一倍 */
+  border: 5px solid #4285F4;
+  /* 去掉光晕 */
+  box-shadow: none;
+  background: transparent;
   pointer-events: none;
   z-index: 9999;
   transform: translate(-50%, -50%);
   will-change: transform;
-  mix-blend-mode: multiply;
+  transition: transform 0.12s ease-out, border-width 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s ease-out;
 }
 
-#custom-cursor-dot {
+/* 悬停可点击元素时，稍微放大一点 */
+#custom-cursor.cursor-hover {
+  transform: translate(-50%, -50%) scale(1.45);
+  border-width: 5px;
+  box-shadow: none;
+}
+
+/* 点击时缩成实心小球，再弹回 */
+#custom-cursor.cursor-clicked {
+  transform: translate(-50%, -50%) scale(0.52);
+  background: transparent;
+  border-width: 20px;
+  box-shadow: none;
+}
+
+/* 光标语义颜色：默认蓝色、问题红色、输入与交互绿色 */
+#custom-cursor.cursor-color-blue {
+  border-color: #4285F4; /* Google 蓝 */
+}
+
+#custom-cursor.cursor-color-red {
+  border-color: #EA4335; /* Google 红 */
+}
+
+#custom-cursor.cursor-color-green {
+  border-color: #34A853; /* Google 绿 */
+}
+
+/* 问题浮层里的候选答案卡片：轻微上浮反馈 */
+.candidate-answer-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.candidate-answer-card:hover {
+  /* 再次减弱上浮幅度，只做极轻微微动 */
+  transform: translateY(-0.5px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.candidate-answer-card:active {
+  transform: translateY(0);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
+}
+
+/* 点击涟漪 */
+.cursor-ripple {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 8px;
-  height: 8px;
-  background: var(--burnt);
-  border-radius: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid rgba(66, 133, 244, 0.6);
   pointer-events: none;
-  z-index: 10000;
-  transform: translate(-50%, -50%);
-  will-change: transform;
+  z-index: 9998;
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 0;
+}
+
+.cursor-ripple-active {
+  animation: cursor-ripple-burst 0.45s ease-out forwards;
+}
+
+@keyframes cursor-ripple-burst {
+  0% {
+    opacity: 0.5;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  70% {
+    opacity: 0.35;
+    transform: translate(-50%, -50%) scale(2.4);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(3);
+  }
+}
+
+/* 网页搜索面板里的单个网页卡片：轻微上浮反馈 */
+#web-search-panel [data-web-search-url] {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+#web-search-panel [data-web-search-url]:hover {
+  /* 与候选答案卡片保持一致的极轻微上浮 */
+  transform: translateY(-0.5px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+}
+
+#web-search-panel [data-web-search-url]:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+}
+
+/* —— 问题浮层 & 网页面板整体位置（取消下沉 / 悬停上升逻辑） —— */
+
+/* 底部整体回答区域：保持抬高，且不参与任何 transform 动画 */
+#mindmap-bottom-bar {
+  bottom: 3rem !important;
+}
+
+/* 问题浮层本身：不再做任何 transform 位移，完全静止 */
+#mindmap-bottom-bar #question-float {
+  transform: none !important;
+}
+
+/* 人工作答框（node-panel）：同样取消下沉 / 悬停上升，固定在正常位置 */
+#mindmap-bottom-bar #node-panel {
+  transform: none !important;
+}
+
+/* 右侧紫色网页框：固定在垂直居中位置，悬停时不再下沉或上升 */
+#web-search-panel {
+  transform: translateX(1rem) translateY(-50%);
+  transition: box-shadow 0.2s ease;
 }
 
 /* 滚动条样式 */
@@ -678,7 +788,8 @@ body.theme-hackathon .node {
 }
 
 body.theme-hackathon .node:hover {
-  transform: translateY(-3px);
+  /* 主题下的节点悬停同样使用轻微上浮 */
+  transform: translateY(-1px);
   box-shadow: 0 4px 0 var(--hack-cyan), 0 8px 20px rgba(47, 125, 225, 0.12) !important;
   border-color: var(--hack-cyan) !important;
 }
@@ -801,7 +912,8 @@ body.theme-hackathon #node-context-menu .entropy-submenu .decrease-item button:h
 }
 
 body.theme-hackathon #custom-cursor {
-  background: var(--hack-cyan);
+  /* 保持空心环，不在这里强制颜色，颜色交给 cursor-color-* 类控制 */
+  background: transparent;
   mix-blend-mode: normal;
 }
 

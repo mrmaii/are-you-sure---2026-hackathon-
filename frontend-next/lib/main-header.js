@@ -30,7 +30,7 @@ const CANVAS_SCALE_MIN = 0.2;
 const CANVAS_SCALE_MAX = 3;
 
 const SUPER_AGENT_BURST_IDS = ["burst-1", "burst-2", "burst-3", "burst-4"];
-const ALLOWED_DOC_TYPES = [".txt", ".pdf", ".docx"];
+const ALLOWED_DOC_TYPES = [".txt", ".pdf", ".docx", ".md"];
 
 (function () {
   if (typeof window === "undefined") return;

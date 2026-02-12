@@ -781,9 +781,9 @@ async def merge_project(project_id: str, session: Session = Depends(get_session)
   return MergeResponse(content=content)
 
 
-# 文档解析：拖拽/上传 txt｜pdf｜docx，用 JSON+Base64 传，不依赖 python-multipart
+# 文档解析：拖拽/上传 txt｜pdf｜docx｜md，用 JSON+Base64 传，不依赖 python-multipart
 
-_ALLOWED_DOC_EXT = {".txt", ".pdf", ".docx"}
+_ALLOWED_DOC_EXT = {".txt", ".pdf", ".docx", ".md"}
 _MAX_DOC_BYTES = 5 * 1024 * 1024  # 5MB
 
 
@@ -831,7 +831,7 @@ async def parse_document(payload: dict = Body(...)) -> dict:
     raise HTTPException(status_code=400, detail="invalid_base64")
   if len(raw) > _MAX_DOC_BYTES:
     raise HTTPException(status_code=400, detail="file_too_large")
-  if ext == ".txt":
+  if ext == ".txt" or ext == ".md":
     text = _parse_txt(raw)
   elif ext == ".pdf":
     try:

@@ -2375,7 +2375,7 @@ function isAllowedFile(file) {
 
 function processDroppedFile(file) {
   if (!file || !isAllowedFile(file)) {
-    showToast("仅支持 .txt、.pdf、.docx 文件", "red");
+    showToast("仅支持 .txt、.pdf、.docx、.md 文件", "red");
     return;
   }
   if (file.size > 5 * 1024 * 1024) {

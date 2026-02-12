@@ -30,7 +30,7 @@ export default function ChatView() {
         <p className="text-xl font-medium max-w-xl mx-auto leading-relaxed" style={{
           color: 'var(--text-secondary)'
         }}>
-          你的创意补全之旅从这里开始。在下方输入构想，或拖拽项目书（txt/pdf/docx）到此处，AI 将实时生成补全脑图。
+          你的创意补全之旅从这里开始。在下方输入构想，或拖拽项目书（txt/pdf/docx/md）到此处，AI 将实时生成补全脑图。
         </p>
       </div>
 
@@ -43,7 +43,7 @@ export default function ChatView() {
           background: 'var(--sand)'
         }}
       >
-        <input type="file" id="drop-file-input" accept=".txt,.pdf,.docx" className="hidden" />
+        <input type="file" id="drop-file-input" accept=".txt,.pdf,.docx,.md" className="hidden" />
         <label htmlFor="drop-file-input" className="cursor-pointer flex flex-col items-center gap-3">
           <div className="w-16 h-16 solid-card flex items-center justify-center" style={{
             background: 'var(--cobalt)',
@@ -55,7 +55,7 @@ export default function ChatView() {
             将项目书拖拽到此处，或<u style={{ color: 'var(--cobalt)' }}>点击上传</u>
           </span>
           <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            支持 .txt、.pdf、.docx，最大 5MB
+            支持 .txt、.pdf、.docx、.md，最大 5MB
           </span>
         </label>
       </div>

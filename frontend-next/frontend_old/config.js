@@ -28,7 +28,7 @@ export const CONNECTOR_MORPHOLOGY = {
 export const CANVAS_SCALE_MIN = 0.25;
 export const CANVAS_SCALE_MAX = 3;
 
-export const ALLOWED_DOC_TYPES = [".txt", ".pdf", ".docx"];
+export const ALLOWED_DOC_TYPES = [".txt", ".pdf", ".docx", ".md"];
 
 export const SUPER_AGENT_BURST_IDS = [
   "super-agent-burst-1",
